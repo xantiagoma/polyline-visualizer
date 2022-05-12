@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Decode & visualize encoded polylines on OpenStreetMaps</title>
+    <meta
+      name="description"
+      content="Online tool to visualize, decode and edit polylines using Leaflet and OpenStreetMap"
+    />
+    <meta name="keywords" content="polyline editor decode encode" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--[if lt IE 9]>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv.js"></script>
+    <![endif]-->
+
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/normalize/7.0.0/normalize.min.css"
+      integrity="sha256-HxaKz5E/eBbvhGMNwhWRPrAR9i/lG1JeT4mD6hCQ7s4="
+      crossorigin="anonymous"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.2.0/dist/leaflet.css"
+      integrity="sha512-M2wvCLH6DSRazYeZRIm1JnYyh22purTM+FDB5CsyxtQJYeKq83arPe5wgbNmcFXGqiSH2XR8dT/fJISVA1r/zQ=="
+      crossorigin=""
+    />
+    <script
+      src="https://unpkg.com/leaflet@1.2.0/dist/leaflet.js"
+      integrity="sha512-lInM/apFSqyy1o6s89K4iQUKg6ppXEgsVxT35HbzUupEVRh2Eu9Wdl4tHj7dZO0s1uvplcYGmt3498TtHq+log=="
+      crossorigin=""
+    ></script>
+
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet.pm@latest/dist/leaflet.pm.css"
+    />
+    <script src="https://unpkg.com/leaflet.pm@latest/dist/leaflet.pm.min.js"></script>
+    <script src="https://unpkg.com/@mapbox/polyline@0.2.0/src/polyline.js"></script>
+  </head>
+  <body>
+    <main>
+      <div id="map"></div>
+      <div id="control">
+        <div class="tabs">
+          <button class="tab active" id="encoded">Encoded Polyline</button>
+          <button class="tab" id="latlng">LatLng Array</button>
+          <button class="tab" id="lnglat">LngLat Array</button>
+        </div>
+        <textarea
+          autofocus
+          id="io"
+          placeholder="paste an encoded polyline here"
+        ></textarea>
+        <p id="error"></p>
+      </div>
+    </main>
+    <div id="app"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
