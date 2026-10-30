@@ -7,6 +7,7 @@ import {
   LocateFixedIcon,
   MapPinPlusIcon,
   PentagonIcon,
+  RouteIcon,
   SplineIcon,
   TableIcon,
   Trash2Icon,
@@ -23,12 +24,16 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {Textarea} from '@/components/ui/textarea';
 import {Tooltip, TooltipContent, TooltipTrigger} from '@/components/ui/tooltip';
 import {formatLabel, parse, serialize} from '@/lib/formats';
 import {exportFile, FILE_TYPES, type FileKind} from '@/lib/files';
+import {COSTINGS, MAX_WAYPOINTS, type Costing} from '@/lib/osm';
 import {formatArea, formatCount, formatDistance, perimeter, ringArea} from '@/lib/geo';
 import {interpretInput, type Action, type Line, type State} from '@/lib/store';
 import {cn, downloadFile} from '@/lib/utils';
@@ -85,8 +90,11 @@ export function LineCard({
   precision,
   dispatch,
   onOpenPanel,
+  onSnap,
 }: {
   onOpenPanel: (panel: LinePanel) => void;
+  /** Re-routes the line along roads through its points. */
+  onSnap: (costing: Costing) => void;
   line: Line;
   index: number;
   selected: boolean;
@@ -219,6 +227,25 @@ export function LineCard({
                 <SplineIcon />
                 Simplify…
               </DropdownMenuItem>
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger disabled={stats.count < 2}>
+                  <RouteIcon />
+                  Snap to roads
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-60">
+                  <DropdownMenuGroup>
+                    <DropdownMenuLabel className="font-normal text-muted-foreground">
+                      Routes through {stats.count > MAX_WAYPOINTS ? `${MAX_WAYPOINTS} of its` : 'its'}{' '}
+                      points (Valhalla)
+                    </DropdownMenuLabel>
+                    {COSTINGS.map((c) => (
+                      <DropdownMenuItem key={c.value} onClick={() => onSnap(c.value)}>
+                        {c.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
               <DropdownMenuItem disabled={stats.count === 0} onClick={() => onOpenPanel('points')}>
                 <TableIcon />
                 Points and segments

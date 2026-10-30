@@ -36,6 +36,7 @@ import type {LatLng} from '@/lib/polyline';
 import {LineCard, type LinePanel} from '@/components/line-card';
 import {PointsPanel} from '@/components/points-panel';
 import {SimplifyPanel, toleranceAt} from '@/components/simplify-panel';
+import {OsmSearch} from '@/components/osm-search';
 import {PlaceSearch} from '@/components/place-search';
 import {ThemeControl} from '@/components/theme-control';
 import {Button} from '@/components/ui/button';
@@ -53,6 +54,15 @@ import {ToggleGroup, ToggleGroupItem} from '@/components/ui/toggle-group';
 import {Tooltip, TooltipContent, TooltipTrigger} from '@/components/ui/tooltip';
 import {FORMATS, formatLabel, serializeAll, type Format} from '@/lib/formats';
 import {formatDistance, perimeter, simplify} from '@/lib/geo';
+import {
+  fetchOsmGeometry,
+  fetchOutline,
+  snapToRoads,
+  COSTINGS,
+  type Bbox,
+  type Costing,
+  type OsmResult,
+} from '@/lib/osm';
 import type {Place} from '@/lib/places';
 import {decode, type Precision} from '@/lib/polyline';
 import {
@@ -321,6 +331,8 @@ export function App() {
   const [satellite, setSatellite] = useState(readSatellite);
   const [place, setPlace] = useState<{place: Place; n: number} | null>(null);
   const mapCenter = useRef<[number, number] | null>(null);
+  const mapBounds = useRef<Bbox | null>(null);
+  const [osmImporting, setOsmImporting] = useState<string | null>(null);
   function toggleSatellite() {
     const next = !satellite;
     setSatellite(next);
@@ -440,6 +452,55 @@ export function App() {
     });
   }
 
+  // Remote shapes: errors become toasts, results are imported like files.
+  async function importRemote(label: string, load: () => Promise<ParsedLine[]>) {
+    const id = toast.loading(`Fetching ${label}…`);
+    try {
+      const lines = await load();
+      closePanel();
+      dispatch({type: 'import', lines});
+      toast.success(`Imported ${label}`, {
+        id,
+        description: `${lines.length} ${lines.length === 1 ? 'shape' : 'shapes'} · ${lines
+          .reduce((n, l) => n + l.coords.length, 0)
+          .toLocaleString('en')} points`,
+      });
+    } catch (err) {
+      toast.error(`Could not import ${label}`, {
+        id,
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  function importShape(picked: Place) {
+    void importRemote(picked.name, () => fetchOutline(picked.osm, picked.span, picked.name));
+  }
+  async function importOsm(result: OsmResult) {
+    setOsmImporting(result.key);
+    await importRemote(result.name, () => fetchOsmGeometry(result));
+    setOsmImporting(null);
+  }
+  async function snap(line: Line, costing: Costing) {
+    const before = line.coords;
+    const how = COSTINGS.find((c) => c.value === costing)!.label.toLowerCase();
+    const id = toast.loading(`Routing ${line.name} ${how}…`);
+    try {
+      const coords = await snapToRoads(line.coords, costing, line.closed);
+      dispatch({type: 'edited', id: line.id, coords});
+      toast.success(`Snapped ${line.name} to roads`, {
+        id,
+        description: `${before.length.toLocaleString('en')} → ${coords.length.toLocaleString('en')} points, ${how}`,
+        duration: 10_000,
+        action: {label: 'Undo', onClick: () => dispatch({type: 'edited', id: line.id, coords: before})},
+      });
+    } catch (err) {
+      toast.error(`Could not route ${line.name}`, {
+        id,
+        description: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return (
     <div
       className="grid h-dvh grid-cols-1 grid-rows-[auto_minmax(14rem,42dvh)_1fr] [grid-template-areas:'header'_'map'_'panel'] md:grid-cols-[minmax(22rem,26rem)_1fr] md:grid-rows-[auto_1fr] md:[grid-template-areas:'header_map'_'panel_map']"
@@ -514,6 +575,7 @@ export function App() {
             highlight={hovered && panelLine ? {coords: hovered, color: panelLine.color} : null}
             focus={focus}
             centerRef={mapCenter}
+            boundsRef={mapBounds}
             onDrawn={(id, coords, closed) => dispatch({type: 'drawn', id, coords, closed})}
             onEdited={(id, coords) => dispatch({type: 'edited', id, coords})}
             onSelect={(id) => dispatch({type: 'select', id})}
@@ -549,6 +611,12 @@ export function App() {
             <PlaceSearch
               near={() => mapCenter.current}
               onSelect={(picked) => setPlace((prev) => ({place: picked, n: (prev?.n ?? 0) + 1}))}
+              onImportShape={importShape}
+            />
+            <OsmSearch
+              bounds={() => mapBounds.current}
+              importing={osmImporting}
+              onImport={(result) => void importOsm(result)}
             />
             {place && (
               <Tooltip>
@@ -570,10 +638,11 @@ export function App() {
             )}
             <Button
               className="shadow-md"
+              aria-label="Draw line"
               onClick={() => dispatch({type: 'setDrawing', drawing: 'line'})}
             >
               <PencilLineIcon data-icon="inline-start" />
-              Draw
+              <span className="hidden sm:inline">Draw</span>
             </Button>
             <Tooltip>
               <TooltipTrigger
@@ -672,6 +741,7 @@ export function App() {
                   precision={state.precision}
                   dispatch={dispatch}
                   onOpenPanel={(kind) => openPanel(kind, line.id)}
+                  onSnap={(costing) => void snap(line, costing)}
                 />
               ))}
               {state.lines.length === 0 && (

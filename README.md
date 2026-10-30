@@ -38,6 +38,14 @@ format at a time and stays in sync with the map.
 - Place search (press `/`): search-as-you-type with
   [Photon](https://photon.komoot.io) over OpenStreetMap, biased to the map
   view; the map flies to the result and drops a marker.
+- Shapes from OpenStreetMap: **Shape** on a search result imports its
+  outline or line (Nominatim lookup, simplified for big areas); the route
+  button finds bus, metro, tram, train, bike and hiking routes, streets and
+  rivers in the map view (Overpass, several public mirrors) and stitches
+  their ways into lines.
+- Snap to roads: re-route a line through its points by car, bike or on foot
+  (Valhalla on FOSSGIS servers; up to 46 waypoints in batches of 10), with
+  undo.
 - Light, dark and system themes; the basemap follows. Satellite view (Esri
   World Imagery with roads and places), remembered per browser.
 

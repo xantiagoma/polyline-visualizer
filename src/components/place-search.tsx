@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import {LoaderCircleIcon, MapPinIcon, SearchIcon} from 'lucide-react';
+import {LoaderCircleIcon, MapPinIcon, PentagonIcon, SearchIcon} from 'lucide-react';
 import {Button} from '@/components/ui/button';
 import {
   Command,
@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/command';
 import {Kbd} from '@/components/ui/kbd';
 import {Popover, PopoverContent, PopoverTrigger} from '@/components/ui/popover';
-import {searchPlaces, type Place} from '@/lib/places';
+import {hasShape, searchPlaces, type Place} from '@/lib/places';
 
 type Status = 'idle' | 'loading' | 'done' | 'error';
 
@@ -19,10 +19,13 @@ type Status = 'idle' | 'loading' | 'done' | 'error';
 export function PlaceSearch({
   near,
   onSelect,
+  onImportShape,
 }: {
   /** Read when a search starts, so it is a getter rather than a value. */
   near: () => [number, number] | null;
   onSelect: (place: Place) => void;
+  /** Imports the place's outline (areas) or line (roads, rivers). */
+  onImportShape: (place: Place) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -121,7 +124,13 @@ export function PlaceSearch({
               </div>
             )}
             {results.length > 0 && (
-              <CommandGroup heading={status === 'loading' ? 'Searching…' : 'Places'}>
+              <CommandGroup
+                heading={
+                  status === 'loading'
+                    ? 'Searching…'
+                    : `${results.length} ${results.length === 1 ? 'place' : 'places'}`
+                }
+              >
                 {results.map((place) => (
                   <CommandItem
                     key={place.id}
@@ -144,13 +153,33 @@ export function PlaceSearch({
                     <span className="shrink-0 text-xs text-muted-foreground capitalize">
                       {place.kind}
                     </span>
+                    {hasShape(place) && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        className="shrink-0"
+                        aria-label={`Import the shape of ${place.name}`}
+                        title="Import its outline or line from OpenStreetMap"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onImportShape(place);
+                          setOpen(false);
+                        }}
+                      >
+                        <PentagonIcon data-icon="inline-start" />
+                        Shape
+                      </Button>
+                    )}
                   </CommandItem>
                 ))}
               </CommandGroup>
             )}
           </CommandList>
           <p className="border-t px-3 py-1.5 text-[0.7rem] text-muted-foreground">
-            Search by{' '}
+            Pick a result to go there; <strong className="font-medium">Shape</strong> imports its
+            outline. Search by{' '}
             <a href="https://photon.komoot.io" target="_blank" rel="noreferrer" className="underline">
               Photon
             </a>{' '}

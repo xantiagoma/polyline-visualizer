@@ -54,6 +54,9 @@ px and desktop.
 | Simplify with tolerance and dashed preview | lib/geo.ts `simplify`, `SimplifyPanel` | T, B (120 → 22 points at 4.9 m) |
 | Points and segments table (edit, delete, hover highlight, fly to point) | lib/geo.ts `segments`, `PointsPanel` | T, B (desktop and 390 px) |
 | Import GPX/KML/GeoJSON/text by drop or picker; download GeoJSON/GPX/KML | lib/files.ts, App drop zone, menus | T (lib/files.test.ts), B (dropped KML zone + GPX track) |
+| Import a place's shape from search (Nominatim lookup) | lib/osm.ts `fetchOutline`, `PlaceSearch` | B (Medellín → zone, 1,330 points, 110 km²) |
+| Routes, streets and rivers in view (Overpass, mirror fallback, stitched ways) | lib/osm.ts, `OsmSearch` | T (queries, grouping, stitching), B (metro lines listed; Carrera 50D, 3 ways → 1 line) |
+| Snap to roads (Valhalla, 10 locations per request, undo) | lib/osm.ts `snapToRoads`, card menu | T (chunking), B (28 → 36 points on foot, undo restores) |
 | Place search (Photon, `/` shortcut, marker, biased to the map centre) | lib/places.ts, `PlaceSearch`, `MapView` | T (lib/places.test.ts), B (“parque berrio medellin” → flies to Parque Berrío, marker removable) |
 | Satellite view (Esri World Imagery + roads/places), saved per browser | `MapView` `STYLES.satellite`, map toolbar toggle | B (lines kept across switches, attribution shown) |
 | Light / dark / system theme, basemap follows | lib/theme.ts, `setStyle` keeping draw layers | B |

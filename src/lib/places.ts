@@ -17,6 +17,10 @@ export type Place = {
   bbox?: [[number, number], [number, number]];
   /** Zoom to use when there is no extent. */
   zoom: number;
+  /** The OSM object, for fetching its shape (ways and relations have one). */
+  osm: {type: string; id: number};
+  /** Rough size in degrees (the extent's diagonal), 0 for points. */
+  span: number;
 };
 
 type PhotonFeature = {
@@ -49,14 +53,21 @@ export function toPlace(feature: PhotonFeature): Place {
     // Photon's extent is [minLon, maxLat, maxLon, minLat].
     bbox: extent ? [[extent[0]!, extent[3]!], [extent[2]!, extent[1]!]] : undefined,
     zoom: type === 'house' ? 17 : type === 'street' ? 16 : type === 'country' ? 5 : 12,
+    osm: {type: String(p.osm_type ?? ''), id: Number(p.osm_id)},
+    span: extent ? Math.hypot(extent[2]! - extent[0]!, extent[1]! - extent[3]!) : 0,
   };
 }
+
+/** Ways and relations have a line or outline worth importing. */
+export const hasShape = (place: Place) =>
+  (place.osm.type === 'W' || place.osm.type === 'R') && Number.isFinite(place.osm.id);
 
 export async function searchPlaces(
   query: string,
   {signal, near}: {signal?: AbortSignal; near?: [number, number] | null} = {},
 ): Promise<Place[]> {
-  const params = new URLSearchParams({q: query, limit: '8'});
+  // 50 is Photon's maximum; the list scrolls.
+  const params = new URLSearchParams({q: query, limit: '50'});
   // Bias results towards what the map is showing.
   if (near) {
     params.set('lon', near[0].toFixed(4));

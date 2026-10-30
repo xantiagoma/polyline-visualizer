@@ -28,6 +28,8 @@ test('maps a Photon feature with an extent', () => {
       [-75.5676884, 6.2504663],
     ],
     zoom: 12,
+    osm: {type: 'W', id: 31965663},
+    span: Math.hypot(-75.5676884 - -75.5685421, 6.2504663 - 6.2495548),
   });
 });
 

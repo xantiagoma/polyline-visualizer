@@ -12,6 +12,7 @@ import {
 } from 'terra-draw';
 import {TerraDrawMapLibreGLAdapter} from 'terra-draw-maplibre-gl-adapter';
 import {bounds} from '@/lib/geo';
+import type {Bbox} from '@/lib/osm';
 import type {Place} from '@/lib/places';
 import type {LatLng} from '@/lib/polyline';
 import type {DrawKind, Line, State} from '@/lib/store';
@@ -204,6 +205,8 @@ type Props = {
   focus: {coords: LatLng; n: number} | null;
   /** Written with the map centre, for search bias. */
   centerRef: RefObject<[number, number] | null>;
+  /** Written with the visible area, for Overpass searches. */
+  boundsRef: RefObject<Bbox | null>;
   onDrawn: (id: string, coords: LatLng[], closed: boolean) => void;
   onEdited: (id: string, coords: LatLng[]) => void;
   onSelect: (id: string | null) => void;
@@ -225,6 +228,7 @@ export default function MapView({
   highlight,
   focus,
   centerRef,
+  boundsRef,
   onDrawn,
   onEdited,
   onSelect,
@@ -372,6 +376,8 @@ export default function MapView({
       const trackCenter = () => {
         const c = map.getCenter();
         centerRef.current = [c.lng, c.lat];
+        const b = map.getBounds();
+        boundsRef.current = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()];
       };
       trackCenter();
       map.on('moveend', trackCenter);
