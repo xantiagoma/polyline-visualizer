@@ -201,6 +201,8 @@ type Props = {
   ghost: {coords: LatLng[]; closed: boolean; color: string} | null;
   /** A point to ring, e.g. the row hovered in the points table. */
   highlight: {coords: LatLng; color: string} | null;
+  /** Unit of the scale bar. */
+  unitSystem: 'metric' | 'imperial';
   /** Fly to a point (e.g. from the points table); `n` changes per request. */
   focus: {coords: LatLng; n: number} | null;
   /** Written with the map centre, for search bias. */
@@ -227,6 +229,7 @@ export default function MapView({
   ghost,
   highlight,
   focus,
+  unitSystem,
   centerRef,
   boundsRef,
   onDrawn,
@@ -236,6 +239,7 @@ export default function MapView({
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const [instance, setInstance] = useState<Instance | null>(null);
+  const scale = useRef<maplibregl.ScaleControl | null>(null);
   // Read by Terra Draw's styling functions, outside React's render.
   const colors = useRef(new Map<string, string>());
   const nextColor = useRef(drawColor);
@@ -271,6 +275,7 @@ export default function MapView({
     bounds(lines.filter((l) => !l.hidden).map((l) => l.coords)),
   );
   const initialStyle = useEffectEvent(() => STYLES[basemap]);
+  const initialUnit = useEffectEvent(() => unitSystem);
 
   // Create the map and Terra Draw once.
   useEffect(() => {
@@ -282,7 +287,8 @@ export default function MapView({
       attributionControl: {compact: true},
     });
     map.addControl(new maplibregl.NavigationControl({visualizePitch: false}), 'top-right');
-    map.addControl(new maplibregl.ScaleControl(), 'bottom-left');
+    scale.current = new maplibregl.ScaleControl({unit: initialUnit()});
+    map.addControl(scale.current, 'bottom-left');
 
     // Guidance points (vertices, midpoints) take the colour of their line;
     // midpoints carry no parent id, but only the selected line has them.
@@ -393,6 +399,10 @@ export default function MapView({
       map.remove();
     };
   }, []);
+
+  useEffect(() => {
+    scale.current?.setUnit(unitSystem);
+  }, [unitSystem]);
 
   // Basemap follows the theme, or the satellite choice.
   const currentBasemap = useRef(basemap);

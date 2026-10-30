@@ -1,7 +1,12 @@
 import {useMemo, useRef, useState, type ActionDispatch} from 'react';
+import {useSortable} from '@dnd-kit/sortable';
+import {CSS} from '@dnd-kit/utilities';
 import {
+  ArrowDownIcon,
+  ArrowUpIcon,
   DownloadIcon,
   EllipsisVerticalIcon,
+  GripVerticalIcon,
   EyeIcon,
   EyeOffIcon,
   LocateFixedIcon,
@@ -34,7 +39,8 @@ import {Tooltip, TooltipContent, TooltipTrigger} from '@/components/ui/tooltip';
 import {formatLabel, parse, serialize} from '@/lib/formats';
 import {exportFile, FILE_TYPES, type FileKind} from '@/lib/files';
 import {COSTINGS, MAX_WAYPOINTS, type Costing} from '@/lib/osm';
-import {formatArea, formatCount, formatDistance, perimeter, ringArea} from '@/lib/geo';
+import {formatCount, perimeter, ringArea} from '@/lib/geo';
+import {useUnits} from '@/lib/units';
 import {interpretInput, type Action, type Line, type State} from '@/lib/store';
 import {cn, downloadFile} from '@/lib/utils';
 
@@ -85,6 +91,7 @@ function IconAction({
 export function LineCard({
   line,
   index,
+  count,
   selected,
   format,
   precision,
@@ -97,6 +104,8 @@ export function LineCard({
   onSnap: (costing: Costing) => void;
   line: Line;
   index: number;
+  /** Number of lines, for the move actions. */
+  count: number;
   selected: boolean;
   format: State['format'];
   precision: State['precision'];
@@ -125,6 +134,10 @@ export function LineCard({
     [line.coords, line.closed],
   );
   const minPoints = line.closed ? 3 : 2;
+  const units = useUnits();
+  // Dragged by the grip only, so text selection in the fields keeps working.
+  const sortable = useSortable({id: line.id});
+  const move = (to: number) => dispatch({type: 'move', id: line.id, to});
 
   function download(kind: FileKind) {
     const file = exportFile([line], kind, line.name);
@@ -146,14 +159,30 @@ export function LineCard({
 
   return (
     <section
+      ref={sortable.setNodeRef}
+      style={{
+        transform: CSS.Translate.toString(sortable.transform),
+        transition: sortable.transition,
+      }}
       aria-labelledby={`${id}-name`}
       className={cn(
         'group/line relative rounded-xl border bg-card p-3 pl-4 shadow-xs transition-colors',
-        selected ? 'border-primary/60 ring-2 ring-primary/15' : 'hover:border-input',
+        selected
+          ? 'border-primary/60 ring-2 ring-primary/15'
+          : 'hover:border-input',
         line.hidden && 'opacity-60',
+        sortable.isDragging && 'z-20 shadow-lg ring-2 ring-primary/40',
       )}
       onFocusCapture={() => dispatch({type: 'select', id: line.id})}
       onPointerDown={() => dispatch({type: 'select', id: line.id})}
+      onKeyDown={(e) => {
+        // Alt+↑/↓ moves the line, except inside text fields (where Alt+arrows
+        // move the caret on macOS).
+        if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+        if ((e.target as HTMLElement).closest('input, textarea')) return;
+        e.preventDefault();
+        move(index + (e.key === 'ArrowUp' ? -1 : 1));
+      }}
     >
       <span
         aria-hidden
@@ -161,14 +190,31 @@ export function LineCard({
         style={{background: line.color}}
       />
       <div className="flex items-center gap-1">
+        <button
+          type="button"
+          ref={sortable.setActivatorNodeRef}
+          {...sortable.attributes}
+          {...sortable.listeners}
+          aria-label={`Reorder ${line.name}. Press Space to pick up, arrows to move, Space to drop.`}
+          title="Drag to reorder (or Alt+↑/↓)"
+          className="-ml-1.5 flex h-7 w-5 shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground/70 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none active:cursor-grabbing"
+        >
+          <GripVerticalIcon className="size-4" />
+        </button>
         <input
           id={`${id}-name`}
           value={line.name}
           aria-label={`Name of line ${index + 1}`}
-          onChange={(e) => dispatch({type: 'rename', id: line.id, name: e.target.value})}
+          onChange={(e) =>
+            dispatch({type: 'rename', id: line.id, name: e.target.value})
+          }
           onBlur={(e) => {
             if (!e.target.value.trim()) {
-              dispatch({type: 'rename', id: line.id, name: `Line ${index + 1}`});
+              dispatch({
+                type: 'rename',
+                id: line.id,
+                name: `Line ${index + 1}`,
+              });
             }
           }}
           className="min-w-0 flex-1 truncate rounded-md bg-transparent px-1 py-0.5 text-sm font-semibold outline-none hover:bg-muted focus-visible:bg-muted focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -215,7 +261,9 @@ export function LineCard({
             <DropdownMenuGroup>
               <DropdownMenuCheckboxItem
                 checked={line.closed}
-                onCheckedChange={() => dispatch({type: 'toggleClosed', id: line.id})}
+                onCheckedChange={() =>
+                  dispatch({type: 'toggleClosed', id: line.id})
+                }
               >
                 <PentagonIcon />
                 Closed (zone)
@@ -235,18 +283,27 @@ export function LineCard({
                 <DropdownMenuSubContent className="w-60">
                   <DropdownMenuGroup>
                     <DropdownMenuLabel className="font-normal text-muted-foreground">
-                      Routes through {stats.count > MAX_WAYPOINTS ? `${MAX_WAYPOINTS} of its` : 'its'}{' '}
+                      Routes through{' '}
+                      {stats.count > MAX_WAYPOINTS
+                        ? `${MAX_WAYPOINTS} of its`
+                        : 'its'}{' '}
                       points (Valhalla)
                     </DropdownMenuLabel>
                     {COSTINGS.map((c) => (
-                      <DropdownMenuItem key={c.value} onClick={() => onSnap(c.value)}>
+                      <DropdownMenuItem
+                        key={c.value}
+                        onClick={() => onSnap(c.value)}
+                      >
                         {c.label}
                       </DropdownMenuItem>
                     ))}
                   </DropdownMenuGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
-              <DropdownMenuItem disabled={stats.count === 0} onClick={() => onOpenPanel('points')}>
+              <DropdownMenuItem
+                disabled={stats.count === 0}
+                onClick={() => onOpenPanel('points')}
+              >
                 <TableIcon />
                 Points and segments
               </DropdownMenuItem>
@@ -266,6 +323,29 @@ export function LineCard({
               ))}
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem
+                disabled={index === 0}
+                onClick={() => move(index - 1)}
+              >
+                <ArrowUpIcon />
+                Move up
+                <span className="ml-auto text-xs text-muted-foreground">
+                  Alt+↑
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                disabled={index === count - 1}
+                onClick={() => move(index + 1)}
+              >
+                <ArrowDownIcon />
+                Move down
+                <span className="ml-auto text-xs text-muted-foreground">
+                  Alt+↓
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
             <DropdownMenuItem
               variant="destructive"
               onClick={() => dispatch({type: 'remove', id: line.id})}
@@ -278,14 +358,20 @@ export function LineCard({
       </div>
       <p className="mt-0.5 px-1 text-xs text-muted-foreground tabular">
         {line.closed && (
-          <Badge variant="secondary" className="mr-1.5 h-4 px-1.5 text-[0.65rem]">
+          <Badge
+            variant="secondary"
+            className="mr-1.5 h-4 px-1.5 text-[0.65rem]"
+          >
             Zone
           </Badge>
         )}
         {formatCount(stats.count)}
-        {line.closed && stats.count >= 3 && ` · ${formatArea(stats.area)}`}
-        {stats.count > 1 && ` · ${formatDistance(stats.length)}${line.closed ? ' perimeter' : ''}`}
-        {stats.count > 0 && stats.count < minPoints && ` · needs ${minPoints} to draw`}
+        {line.closed && stats.count >= 3 && ` · ${units.areaText(stats.area)}`}
+        {stats.count > 1 &&
+          ` · ${units.distance(stats.length)}${line.closed ? ' perimeter' : ''}`}
+        {stats.count > 0 &&
+          stats.count < minPoints &&
+          ` · needs ${minPoints} to draw`}
       </p>
       <Textarea
         id={id}
@@ -318,7 +404,11 @@ export function LineCard({
         )}
       />
       {showError && error && (
-        <div id={`${id}-error`} role="alert" className="mt-2 text-xs text-destructive">
+        <div
+          id={`${id}-error`}
+          role="alert"
+          className="mt-2 text-xs text-destructive"
+        >
           <p>{error.error}</p>
           {error.precision && (
             <Button

@@ -57,6 +57,10 @@ px and desktop.
 | Import a place's shape from search (Nominatim lookup) | lib/osm.ts `fetchOutline`, `PlaceSearch` | B (Medellín → zone, 1,330 points, 110 km²) |
 | Routes, streets and rivers in view (Overpass, mirror fallback, stitched ways) | lib/osm.ts, `OsmSearch` | T (queries, grouping, stitching), B (metro lines listed; Carrera 50D, 3 ways → 1 line) |
 | Snap to roads (Valhalla, 10 locations per request, undo) | lib/osm.ts `snapToRoads`, card menu | T (chunking), B (28 → 36 points on foot, undo restores) |
+| CSV/TSV of points (line, point, lat, lng, segment_m, cumulative_m, bearing_deg, zone) from the points panel and download menus | lib/files.ts `toCsv`/`toTsv` | T, B (parque.csv/.tsv content checked) |
+| CSV/TSV import (column detection, grouping, zones, semicolons/decimal commas, no header) | lib/files.ts `parseDelimited` | T, B (dropped rutas.csv + lote.tsv → 2 lines + 1 zone) |
+| Reorder lines: drag grip, keyboard drag, Move up/down, Alt+↑/↓ | store `move`, dnd-kit in `App`/`LineCard` | T, B (mouse drag, Space/arrows/Space with announcement, Alt+↑) |
+| Units: metric/imperial; fixed length unit (m, km, ft, mi) and area unit (m², ha, km², ft², ac, mi²), or auto | lib/geo.ts, lib/units.tsx `UnitsProvider`, `UnitsMenu` | T, B (imperial: 4.98 mi², 1.09 ac, 490 mi, scale bar in mi) |
 | Place search (Photon, `/` shortcut, marker, biased to the map centre) | lib/places.ts, `PlaceSearch`, `MapView` | T (lib/places.test.ts), B (“parque berrio medellin” → flies to Parque Berrío, marker removable) |
 | Satellite view (Esri World Imagery + roads/places), saved per browser | `MapView` `STYLES.satellite`, map toolbar toggle | B (lines kept across switches, attribution shown) |
 | Light / dark / system theme, basemap follows | lib/theme.ts, `setStyle` keeping draw layers | B |

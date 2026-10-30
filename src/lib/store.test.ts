@@ -281,3 +281,50 @@ test('new zones are named Zone N', () => {
   s = reducer(s, {type: 'drawn', id: 'z', coords: [[0, 0], [0, 1], [1, 1]], closed: true});
   expect(s.lines.at(-1)!.name).toBe('Zone 1');
 });
+
+test('area in a fixed unit', async () => {
+  const {formatArea} = await import('./geo');
+  expect(formatArea(5_000)).toBe('5,000 m²');
+  expect(formatArea(5_000, 'ha')).toBe('0.5 ha');
+  expect(formatArea(5_000, 'km2')).toBe('0.005 km²');
+  expect(formatArea(123_456_789, 'm2')).toBe('123,456,789 m²');
+  expect(formatArea(123_456_789, 'ha')).toBe('12,345.68 ha');
+  expect(formatArea(123_456_789)).toBe('123 km²');
+  expect(formatArea(1_234, 'km2')).toBe('0.00123 km²');
+});
+
+test('imperial distances and areas', async () => {
+  const {formatArea, formatDistance} = await import('./geo');
+  expect(formatDistance(100, 'imperial')).toBe('328 ft');
+  expect(formatDistance(1609.344, 'imperial')).toBe('1 mi');
+  expect(formatDistance(250_000, 'imperial')).toBe('155 mi');
+  expect(formatArea(1_000, 'auto', 'imperial')).toBe('10,764 ft²');
+  expect(formatArea(40_468.564224, 'auto', 'imperial')).toBe('10 ac');
+  expect(formatArea(2_589_988.110336 * 3, 'auto', 'imperial')).toBe('3 mi²');
+  expect(formatArea(4046.8564224, 'ac')).toBe('1 ac');
+  expect(formatArea(10_000, 'mi2')).toBe('0.00386 mi²');
+});
+
+test('fixed length units', async () => {
+  const {formatDistance} = await import('./geo');
+  expect(formatDistance(850)).toBe('850 m');
+  expect(formatDistance(850, 'metric', 'km')).toBe('0.85 km');
+  expect(formatDistance(12, 'metric', 'km')).toBe('0.012 km');
+  expect(formatDistance(14_250, 'imperial', 'm')).toBe('14,250 m');
+  expect(formatDistance(1609.344, 'metric', 'ft')).toBe('5,280 ft');
+  expect(formatDistance(266, 'metric', 'mi')).toBe('0.165 mi');
+  expect(formatDistance(0.4, 'metric', 'm')).toBe('0.4 m');
+});
+
+test('move reorders lines and clamps the target', () => {
+  let s = initialState([{coords: COORDS, name: 'A'}, {coords: COORDS, name: 'B'}, {coords: COORDS, name: 'C'}]);
+  const [a, b, c] = s.lines.map((l) => l.id) as [string, string, string];
+  s = reducer(s, {type: 'move', id: c, to: 0});
+  expect(s.lines.map((l) => l.name)).toEqual(['C', 'A', 'B']);
+  s = reducer(s, {type: 'move', id: c, to: 99});
+  expect(s.lines.map((l) => l.name)).toEqual(['A', 'B', 'C']);
+  expect(reducer(s, {type: 'move', id: a, to: -5})).toBe(s);
+  s = reducer(s, {type: 'move', id: a, to: 1});
+  expect(s.lines.map((l) => l.id)).toEqual([b, a, c]);
+  expect(toHash(s)).toContain('n=B&n=A&n=C');
+});

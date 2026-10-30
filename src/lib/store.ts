@@ -170,6 +170,7 @@ export type Action =
   | {type: 'setPrecision'; precision: Precision}
   | {type: 'add'; id?: string; line?: ParsedLine}
   | {type: 'remove'; id: string}
+  | {type: 'move'; id: string; to: number}
   | {type: 'rename'; id: string; name: string}
   | {type: 'toggleHidden'; id: string}
   | {type: 'select'; id: string | null}
@@ -282,6 +283,16 @@ export function reducer(state: State, action: Action): State {
         state.selectedId === action.id ? (lines.at(-1)?.id ?? null) : state.selectedId;
       const extending = state.extending?.id === action.id ? null : state.extending;
       return {...state, lines, selectedId, extending};
+    }
+    case 'move': {
+      // `to` is the index the line should end up at (clamped to the list).
+      const from = state.lines.findIndex((l) => l.id === action.id);
+      const to = Math.max(0, Math.min(state.lines.length - 1, action.to));
+      if (from === -1 || from === to) return state;
+      const lines = [...state.lines];
+      const [line] = lines.splice(from, 1);
+      lines.splice(to, 0, line!);
+      return {...state, lines};
     }
     case 'rename':
       return update(state, action.id, (l) => ({...l, name: action.name}));

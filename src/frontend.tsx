@@ -7,14 +7,17 @@ import {createRoot, type Root} from 'react-dom/client';
 import {App} from './App';
 import {Toaster} from './components/ui/sonner';
 import {TooltipProvider} from './components/ui/tooltip';
+import {UnitsProvider} from './lib/units';
 
 const elem = document.getElementById('root')!;
 const app = (
   <StrictMode>
-    <TooltipProvider>
-      <App />
-      <Toaster position="bottom-center" />
-    </TooltipProvider>
+    <UnitsProvider>
+      <TooltipProvider>
+        <App />
+        <Toaster position="bottom-center" />
+      </TooltipProvider>
+    </UnitsProvider>
   </StrictMode>
 );
 

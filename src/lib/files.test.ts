@@ -113,3 +113,59 @@ describe('importText', () => {
     expect(exportFile(lines, 'kml', 'Medellín ruta #1').fileName).toBe('medellin-ruta-1.kml');
   });
 });
+
+describe('CSV and TSV', () => {
+  test('one row per point with segment, total and bearing in metres/degrees', async () => {
+    const {toCsv, toTsv} = await import('./files');
+    const csv = toCsv([{coords: [[0, 0], [0, 0.001], [0.001, 0.001]], name: 'Ruta, "uno"'}]);
+    const rows = csv.trim().split('\r\n');
+    expect(rows[0]).toBe('line,point,lat,lng,segment_m,cumulative_m,bearing_deg,zone');
+    expect(rows[1]).toBe('"Ruta, ""uno""",1,0,0,,0,,no');
+    expect(rows[2]).toMatch(/^"Ruta, ""uno""",2,0,0\.001,111\.\d+,111\.\d+,90,no$/);
+    expect(rows).toHaveLength(4);
+    const tsv = toTsv([{coords: [[1, 2]], name: 'A\tB', closed: true}]);
+    expect(tsv).toBe('line\tpoint\tlat\tlng\tsegment_m\tcumulative_m\tbearing_deg\tzone\nA B\t1\t1\t2\t\t0\t\tyes\n');
+  });
+
+  test('exportFile picks the extension and skips empty lines', () => {
+    const file = exportFile(lines, 'tsv', 'Mis rutas');
+    expect(file.fileName).toBe('mis-rutas.tsv');
+    expect(file.mime).toBe('text/tab-separated-values');
+    expect(file.content.trim().split('\n')).toHaveLength(1 + 3 + 3);
+  });
+});
+
+describe('CSV/TSV import', () => {
+  test('our own exports round-trip, lines and zones', async () => {
+    const {parseDelimited, toCsv, toTsv} = await import('./files');
+    for (const text of [toCsv(lines.slice(0, 2)), toTsv(lines.slice(0, 2))]) {
+      const result = parseDelimited(text);
+      expect(result.lines.map((l) => [l.name, l.closed ?? false])).toEqual([
+        ['Ruta & “más”', false],
+        ['Zona', true],
+      ]);
+      expect(result.lines[1]!.coords).toEqual(A);
+    }
+  });
+
+  test('common shapes: other column names, no header, semicolons, quotes', async () => {
+    const {parseDelimited} = await import('./files');
+    const named = parseDelimited('Longitude,Latitude,Elevation\n-75.58,6.24,1500\n-75.56,6.25,1490\n');
+    expect(named.lines).toEqual([{coords: [[6.24, -75.58], [6.25, -75.56]]}]);
+    // Without a header, lat,lng is assumed unless the first column is beyond ±90.
+    const bare = parseDelimited('6.24,-75.58\n6.25,-75.56');
+    expect(bare.lines[0]!.coords).toEqual([[6.24, -75.58], [6.25, -75.56]]);
+    const swapped = parseDelimited('-122.42,37.77\n-122.41,37.78');
+    expect(swapped.lines[0]!.coords).toEqual([[37.77, -122.42], [37.78, -122.41]]);
+    const euro = parseDelimited('lat;lon;route\n6,24;-75,58;"A; norte"\n6,25;-75,56;"A; norte"\nx;y;B');
+    expect(euro.lines).toEqual([{coords: [[6.24, -75.58], [6.25, -75.56]], name: 'A; norte'}]);
+    expect(euro.notes[0]).toBe('1 row without valid coordinates was skipped.');
+  });
+
+  test('importText routes .csv/.tsv and header-only text files', () => {
+    const csv = 'lat,lng\n1,2\n3,4\n';
+    expect('lines' in importText(csv, 'points.csv') && importText(csv, 'points.csv')).toBeTruthy();
+    const r = importText(csv, 'points.txt');
+    expect('lines' in r && r.lines[0]!.coords).toEqual([[1, 2], [3, 4]]);
+  });
+});

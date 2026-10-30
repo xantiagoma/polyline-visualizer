@@ -21,6 +21,7 @@ import {
   MapPinPlusIcon,
   Undo2Icon,
   CheckIcon,
+  ChevronDownIcon,
   MapIcon,
   SatelliteIcon,
   PentagonIcon,
@@ -28,6 +29,24 @@ import {
   DownloadIcon,
 } from 'lucide-react';
 import {flushSync} from 'react-dom';
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type Announcements,
+} from '@dnd-kit/core';
+import {
+  restrictToParentElement,
+  restrictToVerticalAxis,
+} from '@dnd-kit/modifiers';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import {toast} from 'sonner';
 import {downloadFile, writeClipboard} from '@/lib/utils';
 import {exportFile, FILE_TYPES, importText, type FileKind} from '@/lib/files';
@@ -45,6 +64,9 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -53,7 +75,17 @@ import {Tabs, TabsList, TabsTrigger} from '@/components/ui/tabs';
 import {ToggleGroup, ToggleGroupItem} from '@/components/ui/toggle-group';
 import {Tooltip, TooltipContent, TooltipTrigger} from '@/components/ui/tooltip';
 import {FORMATS, formatLabel, serializeAll, type Format} from '@/lib/formats';
-import {formatDistance, perimeter, simplify} from '@/lib/geo';
+import {
+  AREA_UNITS,
+  LENGTH_UNITS,
+  perimeter,
+  ringArea,
+  simplify,
+  type AreaUnit,
+  type LengthUnit,
+  type UnitSystem,
+} from '@/lib/geo';
+import {useUnits} from '@/lib/units';
 import {
   fetchOsmGeometry,
   fetchOutline,
@@ -114,7 +146,9 @@ function MoreMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
-        render={<Button variant="outline" size="icon" aria-label="More actions" />}
+        render={
+          <Button variant="outline" size="icon" aria-label="More actions" />
+        }
       >
         <EllipsisIcon />
       </DropdownMenuTrigger>
@@ -142,7 +176,10 @@ function MoreMenu({
           <DropdownMenuItem
             disabled={!hasCoords}
             onClick={() =>
-              copy(serializeAll(state.lines, 'geojson', state.precision), 'FeatureCollection')
+              copy(
+                serializeAll(state.lines, 'geojson', state.precision),
+                'FeatureCollection',
+              )
             }
           >
             <FileDownIcon />
@@ -153,10 +190,14 @@ function MoreMenu({
         <DropdownMenuGroup>
           <DropdownMenuItem onClick={onImport}>
             <FileUpIcon />
-            Import file (GPX, KML, GeoJSON)…
+            Import file (GPX, KML, GeoJSON, CSV)…
           </DropdownMenuItem>
           {(Object.keys(FILE_TYPES) as FileKind[]).map((kind) => (
-            <DropdownMenuItem key={kind} disabled={!hasCoords} onClick={() => downloadAll(kind)}>
+            <DropdownMenuItem
+              key={kind}
+              disabled={!hasCoords}
+              onClick={() => downloadAll(kind)}
+            >
               <DownloadIcon />
               Download all as {FILE_TYPES[kind].label}
             </DropdownMenuItem>
@@ -166,13 +207,19 @@ function MoreMenu({
         <DropdownMenuGroup>
           <DropdownMenuItem
             onClick={() =>
-              dispatch({type: 'add', line: {coords: decode(EXAMPLE, 5), name: 'Example'}})
+              dispatch({
+                type: 'add',
+                line: {coords: decode(EXAMPLE, 5), name: 'Example'},
+              })
             }
           >
             <SparklesIcon />
             Add example line
           </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onClick={() => dispatch({type: 'clear'})}>
+          <DropdownMenuItem
+            variant="destructive"
+            onClick={() => dispatch({type: 'clear'})}
+          >
             <ListRestartIcon />
             Remove all lines
           </DropdownMenuItem>
@@ -185,12 +232,20 @@ function MoreMenu({
 const PRESSED =
   'aria-pressed:border-primary/50 aria-pressed:bg-accent aria-pressed:text-primary';
 
-function Settings({state, dispatch}: {state: State; dispatch: ActionDispatch<[Action]>}) {
+function Settings({
+  state,
+  dispatch,
+}: {
+  state: State;
+  dispatch: ActionDispatch<[Action]>;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Tabs
         value={state.format}
-        onValueChange={(format) => dispatch({type: 'setFormat', format: format as Format})}
+        onValueChange={(format) =>
+          dispatch({type: 'setFormat', format: format as Format})
+        }
         className="min-w-[18rem] flex-1"
       >
         <TabsList className="w-full" aria-label="Format">
@@ -210,23 +265,34 @@ function Settings({state, dispatch}: {state: State; dispatch: ActionDispatch<[Ac
               value={[String(state.precision)]}
               onValueChange={(value: string[]) => {
                 if (value[0]) {
-                  dispatch({type: 'setPrecision', precision: Number(value[0]) as Precision});
+                  dispatch({
+                    type: 'setPrecision',
+                    precision: Number(value[0]) as Precision,
+                  });
                 }
               }}
               aria-label="Encoding precision"
             />
           }
         >
-          <ToggleGroupItem value="5" aria-label="Precision 5" className={PRESSED}>
+          <ToggleGroupItem
+            value="5"
+            aria-label="Precision 5"
+            className={PRESSED}
+          >
             1e5
           </ToggleGroupItem>
-          <ToggleGroupItem value="6" aria-label="Precision 6" className={PRESSED}>
+          <ToggleGroupItem
+            value="6"
+            aria-label="Precision 6"
+            className={PRESSED}
+          >
             1e6
           </ToggleGroupItem>
         </TooltipTrigger>
         <TooltipContent className="max-w-64">
-          Encoded polyline precision: 5 decimals (Google) or 6 (OSRM, Valhalla). Also
-          used for the share link.
+          Encoded polyline precision: 5 decimals (Google) or 6 (OSRM, Valhalla).
+          Also used for the share link.
         </TooltipContent>
       </Tooltip>
     </div>
@@ -241,7 +307,13 @@ function MapFallback() {
   );
 }
 
-function DrawingBanner({kind, onCancel}: {kind: DrawKind; onCancel: () => void}) {
+function DrawingBanner({
+  kind,
+  onCancel,
+}: {
+  kind: DrawKind;
+  onCancel: () => void;
+}) {
   const Icon = kind === 'zone' ? PentagonIcon : PencilLineIcon;
   return (
     <div className="absolute inset-x-3 top-3 z-10 mx-auto flex max-w-md items-center gap-2 rounded-lg border bg-card/95 px-3 py-2 text-xs shadow-md backdrop-blur sm:text-sm">
@@ -249,12 +321,13 @@ function DrawingBanner({kind, onCancel}: {kind: DrawKind; onCancel: () => void})
       <p className="min-w-0 flex-1">
         {kind === 'zone' ? (
           <>
-            Click to add corners. Click the first point or press <Kbd>Enter</Kbd> to close the
-            zone.
+            Click to add corners. Click the first point or press{' '}
+            <Kbd>Enter</Kbd> to close the zone.
           </>
         ) : (
           <>
-            Click to add points. Click the last point or press <Kbd>Enter</Kbd> to finish.
+            Click to add points. Click the last point or press <Kbd>Enter</Kbd>{' '}
+            to finish.
           </>
         )}
       </p>
@@ -279,15 +352,17 @@ function ExtendBanner({
     <div className="absolute inset-x-3 top-3 z-10 mx-auto flex max-w-lg flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border bg-card/95 px-3 py-2 text-xs shadow-md backdrop-blur sm:text-sm">
       <MapPinPlusIcon className="size-4 shrink-0" style={{color: line.color}} />
       <p className="min-w-0 flex-1 basis-48">
-        Click the map to add points to <strong className="font-semibold">{line.name}</strong>.{' '}
-        <Kbd>⌫</Kbd> removes the last one.
+        Click the map to add points to{' '}
+        <strong className="font-semibold">{line.name}</strong>. <Kbd>⌫</Kbd>{' '}
+        removes the last one.
       </p>
       <ToggleGroup
         variant="outline"
         size="sm"
         value={[end]}
         onValueChange={(value: string[]) => {
-          if (value[0]) dispatch({type: 'extend', id: line.id, end: value[0] as LineEnd});
+          if (value[0])
+            dispatch({type: 'extend', id: line.id, end: value[0] as LineEnd});
         }}
         aria-label="Add points at"
       >
@@ -325,10 +400,120 @@ function readSatellite() {
   }
 }
 
+function UnitsMenu() {
+  const units = useUnits();
+  const fixed = [
+    units.length === 'auto'
+      ? null
+      : LENGTH_UNITS.find((u) => u.value === units.length)!.short,
+    units.area === 'auto'
+      ? null
+      : AREA_UNITS.find((u) => u.value === units.area)!.short,
+  ].filter(Boolean);
+  const label = `${units.system === 'metric' ? 'Metric' : 'Imperial'}${fixed.length ? ` · ${fixed.join(', ')}` : ''}`;
+  const autoHint = (metric: string, imperial: string) =>
+    units.system === 'metric' ? metric : imperial;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="xs"
+            className="-my-1 shrink-0 text-muted-foreground"
+            aria-label={`Units: ${label}`}
+          />
+        }
+      >
+        {label}
+        <ChevronDownIcon data-icon="inline-end" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="max-h-[min(32rem,var(--available-height))] w-64 overflow-y-auto"
+      >
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>System (used by Auto)</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={units.system}
+            onValueChange={(v) => units.setSystem(v as UnitSystem)}
+          >
+            <DropdownMenuRadioItem value="metric" closeOnClick>
+              Metric
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="imperial" closeOnClick>
+              Imperial (US)
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Lengths and perimeters</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={units.length}
+            onValueChange={(v) => units.setLength(v as LengthUnit)}
+          >
+            {LENGTH_UNITS.map((u) => (
+              <DropdownMenuRadioItem key={u.value} value={u.value} closeOnClick>
+                {u.label}
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {u.value === 'auto' ? autoHint('m, km', 'ft, mi') : u.short}
+                </span>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Zone areas</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={units.area}
+            onValueChange={(v) => units.setArea(v as AreaUnit)}
+          >
+            {AREA_UNITS.map((u) => (
+              <DropdownMenuRadioItem key={u.value} value={u.value} closeOnClick>
+                {u.label}
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {u.value === 'auto'
+                    ? autoHint('m², ha, km²', 'ft², ac, mi²')
+                    : u.short}
+                </span>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function App() {
-  const [state, dispatch] = useReducer(reducer, undefined, () => fromHash(location.hash));
+  const [state, dispatch] = useReducer(reducer, undefined, () =>
+    fromHash(location.hash),
+  );
   const {resolved: theme} = useTheme();
   const [satellite, setSatellite] = useState(readSatellite);
+  const units = useUnits();
+  const sensors = useSensors(
+    // A few pixels of movement before dragging, so a tap still focuses.
+    useSensor(PointerSensor, {activationConstraint: {distance: 4}}),
+    useSensor(KeyboardSensor, {coordinateGetter: sortableKeyboardCoordinates}),
+  );
+  const nameOf = (id: string | number) =>
+    state.lines.find((l) => l.id === id)?.name ?? 'line';
+  const positionOf = (id: string | number | undefined) =>
+    `position ${state.lines.findIndex((l) => l.id === id) + 1} of ${state.lines.length}`;
+  const announcements: Announcements = {
+    onDragStart: ({active}) => `Picked up ${nameOf(active.id)}.`,
+    onDragOver: ({active, over}) =>
+      over ? `${nameOf(active.id)} is over ${positionOf(over.id)}.` : undefined,
+    onDragEnd: ({active, over}) =>
+      over
+        ? `Dropped ${nameOf(active.id)} at ${positionOf(over.id)}.`
+        : `Dropped ${nameOf(active.id)}.`,
+    onDragCancel: ({active}) =>
+      `Cancelled. ${nameOf(active.id)} was not moved.`,
+  };
   const [place, setPlace] = useState<{place: Place; n: number} | null>(null);
   const mapCenter = useRef<[number, number] | null>(null);
   const mapBounds = useRef<Bbox | null>(null);
@@ -346,7 +531,11 @@ export function App() {
   const hash = toHash(state);
   useEffect(() => {
     if (hash !== location.hash) {
-      history.replaceState(null, '', hash || location.pathname + location.search);
+      history.replaceState(
+        null,
+        '',
+        hash || location.pathname + location.search,
+      );
     }
   }, [hash]);
   useEffect(() => {
@@ -364,6 +553,8 @@ export function App() {
       lines: drawn.length,
       points: drawn.reduce((n, l) => n + l.coords.length, 0),
       length: drawn.reduce((m, l) => m + perimeter(l.coords, l.closed), 0),
+      zones: drawn.filter((l) => l.closed && l.coords.length >= 3).length,
+      area: drawn.reduce((m, l) => m + (l.closed ? ringArea(l.coords) : 0), 0),
     };
   }, [state.lines]);
   // While adding points: Enter/Esc finish, Backspace undoes (outside fields).
@@ -394,7 +585,9 @@ export function App() {
 
   // One line tool at a time: Simplify floats over the map, Points replaces
   // the line list. Both close if their line is deleted.
-  const [panel, setPanel] = useState<{kind: LinePanel; id: string} | null>(null);
+  const [panel, setPanel] = useState<{kind: LinePanel; id: string} | null>(
+    null,
+  );
   const panelLine = state.lines.find((l) => l.id === panel?.id);
   const [simplifyAt, setSimplifyAt] = useState(30);
   const simplified = useMemo(
@@ -432,7 +625,9 @@ export function App() {
       }
       const result = importText(await file.text(), file.name, state.precision);
       if ('error' in result) {
-        toast.error(`Could not import ${file.name}`, {description: result.error});
+        toast.error(`Could not import ${file.name}`, {
+          description: result.error,
+        });
         continue;
       }
       const base = file.name.replace(/\.[^.]+$/, '');
@@ -447,13 +642,19 @@ export function App() {
     if (lines.length === 0) return;
     closePanel();
     dispatch({type: 'import', lines});
-    toast.success(`Imported ${lines.length} ${lines.length === 1 ? 'shape' : 'shapes'}`, {
-      description: notes.join(' ') || undefined,
-    });
+    toast.success(
+      `Imported ${lines.length} ${lines.length === 1 ? 'shape' : 'shapes'}`,
+      {
+        description: notes.join(' ') || undefined,
+      },
+    );
   }
 
   // Remote shapes: errors become toasts, results are imported like files.
-  async function importRemote(label: string, load: () => Promise<ParsedLine[]>) {
+  async function importRemote(
+    label: string,
+    load: () => Promise<ParsedLine[]>,
+  ) {
     const id = toast.loading(`Fetching ${label}…`);
     try {
       const lines = await load();
@@ -473,7 +674,9 @@ export function App() {
     }
   }
   function importShape(picked: Place) {
-    void importRemote(picked.name, () => fetchOutline(picked.osm, picked.span, picked.name));
+    void importRemote(picked.name, () =>
+      fetchOutline(picked.osm, picked.span, picked.name),
+    );
   }
   async function importOsm(result: OsmResult) {
     setOsmImporting(result.key);
@@ -491,7 +694,11 @@ export function App() {
         id,
         description: `${before.length.toLocaleString('en')} → ${coords.length.toLocaleString('en')} points, ${how}`,
         duration: 10_000,
-        action: {label: 'Undo', onClick: () => dispatch({type: 'edited', id: line.id, coords: before})},
+        action: {
+          label: 'Undo',
+          onClick: () =>
+            dispatch({type: 'edited', id: line.id, coords: before}),
+        },
       });
     } catch (err) {
       toast.error(`Could not route ${line.name}`, {
@@ -510,7 +717,8 @@ export function App() {
         setDragging(true);
       }}
       onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+          setDragging(false);
       }}
       onDrop={(e) => {
         if (!e.dataTransfer.files.length) return;
@@ -523,7 +731,7 @@ export function App() {
         ref={fileInput}
         type="file"
         multiple
-        accept=".gpx,.kml,.geojson,.json,.txt,application/gpx+xml,application/vnd.google-earth.kml+xml,application/geo+json,application/json,text/plain"
+        accept=".gpx,.kml,.geojson,.json,.csv,.tsv,.txt,application/gpx+xml,application/vnd.google-earth.kml+xml,application/geo+json,application/json,text/csv,text/tab-separated-values,text/plain"
         className="hidden"
         onChange={(e) => {
           if (e.target.files) void importFiles(e.target.files);
@@ -535,7 +743,9 @@ export function App() {
           <div className="text-center">
             <FileUpIcon className="mx-auto size-8 text-primary" />
             <p className="mt-2 font-semibold">Drop to import</p>
-            <p className="text-sm text-muted-foreground">GPX, KML, GeoJSON or text with polylines</p>
+            <p className="text-sm text-muted-foreground">
+              GPX, KML, GeoJSON, CSV/TSV or text with polylines
+            </p>
           </div>
         </div>
       )}
@@ -569,14 +779,25 @@ export function App() {
             place={place}
             ghost={
               simplified && panelLine
-                ? {coords: simplified, closed: panelLine.closed, color: panelLine.color}
+                ? {
+                    coords: simplified,
+                    closed: panelLine.closed,
+                    color: panelLine.color,
+                  }
                 : null
             }
-            highlight={hovered && panelLine ? {coords: hovered, color: panelLine.color} : null}
+            highlight={
+              hovered && panelLine
+                ? {coords: hovered, color: panelLine.color}
+                : null
+            }
             focus={focus}
+            unitSystem={units.system}
             centerRef={mapCenter}
             boundsRef={mapBounds}
-            onDrawn={(id, coords, closed) => dispatch({type: 'drawn', id, coords, closed})}
+            onDrawn={(id, coords, closed) =>
+              dispatch({type: 'drawn', id, coords, closed})
+            }
             onEdited={(id, coords) => dispatch({type: 'edited', id, coords})}
             onSelect={(id) => dispatch({type: 'select', id})}
             onExtendPoint={(coords) => dispatch({type: 'addPoint', coords})}
@@ -605,12 +826,18 @@ export function App() {
             onCancel={() => dispatch({type: 'setDrawing', drawing: false})}
           />
         ) : extendingLine && state.extending ? (
-          <ExtendBanner line={extendingLine} end={state.extending.end} dispatch={dispatch} />
+          <ExtendBanner
+            line={extendingLine}
+            end={state.extending.end}
+            dispatch={dispatch}
+          />
         ) : (
           <div className="absolute top-3 right-14 left-3 z-10 flex flex-wrap gap-2">
             <PlaceSearch
               near={() => mapCenter.current}
-              onSelect={(picked) => setPlace((prev) => ({place: picked, n: (prev?.n ?? 0) + 1}))}
+              onSelect={(picked) =>
+                setPlace((prev) => ({place: picked, n: (prev?.n ?? 0) + 1}))
+              }
               onImportShape={importShape}
             />
             <OsmSearch
@@ -633,7 +860,9 @@ export function App() {
                 >
                   <XIcon />
                 </TooltipTrigger>
-                <TooltipContent>Remove marker: {place.place.name}</TooltipContent>
+                <TooltipContent>
+                  Remove marker: {place.place.name}
+                </TooltipContent>
               </Tooltip>
             )}
             <Button
@@ -652,7 +881,9 @@ export function App() {
                     size="icon"
                     className="bg-card shadow-md"
                     aria-label="Draw zone"
-                    onClick={() => dispatch({type: 'setDrawing', drawing: 'zone'})}
+                    onClick={() =>
+                      dispatch({type: 'setDrawing', drawing: 'zone'})
+                    }
                   />
                 }
               >
@@ -665,9 +896,14 @@ export function App() {
                 variant="outline"
                 className="bg-card shadow-md"
                 aria-label="Add points"
-                onClick={() => dispatch({type: 'extend', id: selectedLine.id, end: 'end'})}
+                onClick={() =>
+                  dispatch({type: 'extend', id: selectedLine.id, end: 'end'})
+                }
               >
-                <MapPinPlusIcon data-icon="inline-start" style={{color: selectedLine.color}} />
+                <MapPinPlusIcon
+                  data-icon="inline-start"
+                  style={{color: selectedLine.color}}
+                />
                 <span className="hidden sm:inline">Add points</span>
               </Button>
             )}
@@ -695,14 +931,18 @@ export function App() {
                     variant="outline"
                     size="icon"
                     className="bg-card shadow-md"
-                    aria-label={satellite ? 'Show map view' : 'Show satellite view'}
+                    aria-label={
+                      satellite ? 'Show map view' : 'Show satellite view'
+                    }
                     onClick={toggleSatellite}
                   />
                 }
               >
                 {satellite ? <MapIcon /> : <SatelliteIcon />}
               </TooltipTrigger>
-              <TooltipContent>{satellite ? 'Map view' : 'Satellite view'}</TooltipContent>
+              <TooltipContent>
+                {satellite ? 'Map view' : 'Satellite view'}
+              </TooltipContent>
             </Tooltip>
           </div>
         )}
@@ -718,32 +958,60 @@ export function App() {
             dispatch={dispatch}
             onClose={closePanel}
             onHover={setHovered}
-            onLocate={(coords) => setFocus((prev) => ({coords, n: (prev?.n ?? 0) + 1}))}
+            onLocate={(coords) =>
+              setFocus((prev) => ({coords, n: (prev?.n ?? 0) + 1}))
+            }
           />
         ) : (
           <>
             <div className="flex flex-col gap-2 border-b px-4 py-3">
               <Settings state={state} dispatch={dispatch} />
-              <p className="text-xs text-muted-foreground tabular" aria-live="polite">
-                {totals.lines === 0
-                  ? 'Paste a polyline, drop a file or draw on the map.'
-                  : `${totals.lines} ${totals.lines === 1 ? 'shape' : 'shapes'} · ${totals.points.toLocaleString('en')} points · ${formatDistance(totals.length)}`}
-              </p>
+              <div className="flex items-center gap-2">
+                <p
+                  className="min-w-0 flex-1 text-xs text-muted-foreground tabular"
+                  aria-live="polite"
+                >
+                  {totals.lines === 0
+                    ? 'Paste a polyline, drop a file or draw on the map.'
+                    : `${totals.lines} ${totals.lines === 1 ? 'shape' : 'shapes'} · ${totals.points.toLocaleString('en')} points · ${units.distance(totals.length)}${
+                        totals.zones ? ` · ${units.areaText(totals.area)}` : ''
+                      }`}
+                </p>
+                {totals.lines > 0 && <UnitsMenu />}
+              </div>
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-              {state.lines.map((line, index) => (
-                <LineCard
-                  key={line.id}
-                  line={line}
-                  index={index}
-                  selected={line.id === state.selectedId}
-                  format={state.format}
-                  precision={state.precision}
-                  dispatch={dispatch}
-                  onOpenPanel={(kind) => openPanel(kind, line.id)}
-                  onSnap={(costing) => void snap(line, costing)}
-                />
-              ))}
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+                accessibility={{announcements}}
+                onDragEnd={({active, over}) => {
+                  if (!over || active.id === over.id) return;
+                  const to = state.lines.findIndex((l) => l.id === over.id);
+                  dispatch({type: 'move', id: String(active.id), to});
+                }}
+              >
+                <SortableContext
+                  items={state.lines.map((l) => l.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {state.lines.map((line, index) => (
+                    <LineCard
+                      key={line.id}
+                      line={line}
+                      index={index}
+                      count={state.lines.length}
+                      selected={line.id === state.selectedId}
+                      format={state.format}
+                      precision={state.precision}
+                      dispatch={dispatch}
+                      onOpenPanel={(kind) => openPanel(kind, line.id)}
+                      onSnap={(costing) => void snap(line, costing)}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
               {state.lines.length === 0 && (
                 <p className="py-6 text-center text-sm text-muted-foreground">
                   No lines. Add one, draw on the map or drop a file.
@@ -767,7 +1035,10 @@ export function App() {
                 variant={state.drawing ? 'secondary' : 'outline'}
                 className="flex-1"
                 onClick={() =>
-                  dispatch({type: 'setDrawing', drawing: state.drawing ? false : 'line'})
+                  dispatch({
+                    type: 'setDrawing',
+                    drawing: state.drawing ? false : 'line',
+                  })
                 }
               >
                 <PencilLineIcon data-icon="inline-start" />

@@ -1,10 +1,13 @@
 import {useMemo, useState, type ActionDispatch} from 'react';
-import {ArrowLeftIcon, Trash2Icon} from 'lucide-react';
+import {ArrowLeftIcon, DownloadIcon, Trash2Icon} from 'lucide-react';
 import {toast} from 'sonner';
 import {Button} from '@/components/ui/button';
-import {compass, distance, formatDistance, segments} from '@/lib/geo';
+import {exportFile} from '@/lib/files';
+import {compass, distance, segments} from '@/lib/geo';
+import {useUnits} from '@/lib/units';
 import type {LatLng} from '@/lib/polyline';
 import type {Action, Line} from '@/lib/store';
+import {downloadFile} from '@/lib/utils';
 
 const PAGE = 200;
 
@@ -69,6 +72,7 @@ export function PointsPanel({
   onLocate: (point: LatLng) => void;
 }) {
   const [shown, setShown] = useState(PAGE);
+  const {distance: formatDistance} = useUnits();
   const rows = useMemo(() => segments(line.coords), [line.coords]);
   const closing =
     line.closed && line.coords.length > 2 ? distance(line.coords.at(-1)!, line.coords[0]!) : null;
@@ -93,6 +97,25 @@ export function PointsPanel({
         <span className="shrink-0 text-xs text-muted-foreground tabular">
           {formatDistance(total)}
         </span>
+      </div>
+      <div className="flex items-center gap-2 border-b px-4 py-1.5">
+        <span className="min-w-0 flex-1 text-xs text-muted-foreground">
+          Download the table (metres and degrees)
+        </span>
+        {(['csv', 'tsv'] as const).map((kind) => (
+          <Button
+            key={kind}
+            variant="outline"
+            size="xs"
+            onClick={() => {
+              const file = exportFile([line], kind, line.name);
+              downloadFile(file.content, file.fileName, file.mime);
+            }}
+          >
+            <DownloadIcon data-icon="inline-start" />
+            {kind.toUpperCase()}
+          </Button>
+        ))}
       </div>
       <div className="min-h-0 flex-1 overflow-auto" onPointerLeave={() => onHover(null)}>
         <table className="w-full table-fixed text-xs">

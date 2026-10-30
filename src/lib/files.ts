@@ -1,4 +1,5 @@
-import {detectFormat, parse, ringOf, stringifyGeoJson, toGeoJsonFeature, type ParsedLine} from './formats';
+import {detectFormat, detectRing, parse, ringOf, stringifyGeoJson, toGeoJsonFeature, type ParsedLine} from './formats';
+import {segments} from './geo';
 import {firstOutOfRange, type LatLng, type Precision} from './polyline';
 
 /**
@@ -10,7 +11,7 @@ import {firstOutOfRange, type LatLng, type Precision} from './polyline';
 
 export type ImportResult = {lines: ParsedLine[]; notes: string[]};
 
-export type FileKind = 'geojson' | 'gpx' | 'kml';
+export type FileKind = 'geojson' | 'gpx' | 'kml' | 'csv' | 'tsv';
 
 const ENTITIES: Record<string, string> = {amp: '&', lt: '<', gt: '>', quot: '"', apos: "'"};
 
@@ -120,6 +121,137 @@ export function parseKml(xml: string): ImportResult {
   };
 }
 
+// --- CSV / TSV ---------------------------------------------------------------
+
+/** Splits one delimited line, honouring "quoted, fields" with "" escapes. */
+function splitRow(line: string, delimiter: string): string[] {
+  if (delimiter === '\t') return line.split('\t');
+  const cells: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (quoted) {
+      if (c === '"' && line[i + 1] === '"') {
+        cell += '"';
+        i++;
+      } else if (c === '"') {
+        quoted = false;
+      } else {
+        cell += c;
+      }
+    } else if (c === '"' && cell.trim() === '') {
+      quoted = true;
+      cell = '';
+    } else if (c === delimiter) {
+      cells.push(cell);
+      cell = '';
+    } else {
+      cell += c;
+    }
+  }
+  cells.push(cell);
+  return cells.map((v) => v.trim());
+}
+
+/** Splits rows, keeping line breaks that are inside quotes. */
+function splitLines(text: string): string[] {
+  const rows: string[] = [];
+  let row = '';
+  let quoted = false;
+  for (const c of text) {
+    if (c === '"') quoted = !quoted;
+    if ((c === '\n' || c === '\r') && !quoted) {
+      if (row.trim()) rows.push(row);
+      row = '';
+    } else {
+      row += c;
+    }
+  }
+  if (row.trim()) rows.push(row);
+  return rows;
+}
+
+const LAT = /^(lat|latitude|y)$/i;
+const LNG = /^(lng|lon|long|longitude|x)$/i;
+const GROUP = /^(line|name|track|route|shape|id|segment)$/i;
+const ZONE = /^(zone|closed|polygon)$/i;
+
+/** True for a header (or first row) that looks like coordinates in columns. */
+export function looksDelimited(text: string): boolean {
+  const first = text.split(/\r?\n/, 1)[0] ?? '';
+  const delimiter = first.includes('\t') ? '\t' : first.includes(';') ? ';' : ',';
+  const cells = splitRow(first, delimiter);
+  return (
+    cells.length >= 2 &&
+    (cells.some((c) => LAT.test(c)) || cells.every((c) => c === '' || Number.isFinite(Number(c))))
+  );
+}
+
+/**
+ * CSV/TSV/semicolon tables with a point per row. Columns are found by name
+ * (lat/latitude, lng/lon/longitude, optional line/name/track… to split into
+ * several lines, and zone); without a header the first two columns are
+ * lat, lng (or lng, lat when the first is beyond ±90). Our own CSV/TSV
+ * exports round-trip.
+ */
+export function parseDelimited(text: string): ImportResult {
+  const rows = splitLines(text.replace(/^\uFEFF/, ''));
+  if (rows.length === 0) return {lines: [], notes: []};
+  const delimiter = rows[0]!.includes('\t') ? '\t' : rows[0]!.includes(';') ? ';' : ',';
+  // Semicolon files usually come from locales with decimal commas.
+  const number = (v: string | undefined) =>
+    v === undefined || v.trim() === '' ? NaN : Number(delimiter === ';' ? v.replace(',', '.') : v);
+  const table = rows.map((r) => splitRow(r, delimiter));
+  const header = table[0]!;
+  const latCol = header.findIndex((c) => LAT.test(c));
+  const lngCol = header.findIndex((c) => LNG.test(c));
+  let body = table;
+  let cols = {lat: 0, lng: 1, group: -1, zone: -1};
+  if (latCol !== -1 && lngCol !== -1) {
+    body = table.slice(1);
+    cols = {
+      lat: latCol,
+      lng: lngCol,
+      group: header.findIndex((c) => GROUP.test(c)),
+      zone: header.findIndex((c) => ZONE.test(c)),
+    };
+  } else if (body.some((r) => Math.abs(number(r[0])) > 90)) {
+    cols = {lat: 1, lng: 0, group: -1, zone: -1};
+  }
+
+  const groups = new Map<string, {coords: LatLng[]; closed: boolean}>();
+  let skipped = 0;
+  for (const row of body) {
+    const lat = number(row[cols.lat]);
+    const lng = number(row[cols.lng]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      skipped++;
+      continue;
+    }
+    const key = cols.group === -1 ? '' : (row[cols.group] ?? '');
+    const group = groups.get(key) ?? {coords: [], closed: false};
+    group.coords.push([lat, lng]);
+    if (cols.zone !== -1 && /^(yes|true|1|y)$/i.test(row[cols.zone] ?? '')) group.closed = true;
+    groups.set(key, group);
+  }
+  const lines: ParsedLine[] = [...groups.entries()].map(([name, g]) => {
+    // A ring written with its first point repeated is a zone too.
+    const ring = detectRing(g.coords);
+    return {
+      coords: ring.coords,
+      ...(name && {name}),
+      ...((g.closed || ring.closed) && g.coords.length >= 3 && {closed: true}),
+    };
+  });
+  return {
+    lines,
+    notes: skipped
+      ? [`${skipped} ${skipped === 1 ? 'row' : 'rows'} without valid coordinates ${skipped === 1 ? 'was' : 'were'} skipped.`]
+      : [],
+  };
+}
+
 /**
  * Reads a dropped or picked file's text. GPX and KML by content; anything
  * else goes through the same detection as pasted text (GeoJSON, arrays or
@@ -132,6 +264,8 @@ export function importText(text: string, fileName = '', precision: Precision = 5
     result = parseGpx(text);
   } else if (/\.kml$/i.test(fileName) || /<kml\b/i.test(head)) {
     result = parseKml(text);
+  } else if (/\.(csv|tsv|tab)$/i.test(fileName) || (/\.txt$|^$/i.test(fileName) && looksDelimited(text))) {
+    result = parseDelimited(text);
   } else {
     const format = detectFormat(text) ?? 'latlng';
     const parsed = parse(text, format, precision);
@@ -205,15 +339,73 @@ export function toGeoJsonFile(lines: ExportLine[]) {
   return `${stringifyGeoJson({type: 'FeatureCollection', features})}\n`;
 }
 
+/**
+ * One row per point, in metres and degrees whatever units the page shows, so
+ * spreadsheets get plain numbers. Zones list their points once (no repeated
+ * closing point) and are marked in the `zone` column.
+ */
+export const TABLE_COLUMNS = [
+  'line',
+  'point',
+  'lat',
+  'lng',
+  'segment_m',
+  'cumulative_m',
+  'bearing_deg',
+  'zone',
+] as const;
+
+function tableRows(lines: ExportLine[]): (string | number)[][] {
+  const round = (n: number, d: number) => Math.round(n * 10 ** d) / 10 ** d;
+  return lines.flatMap((l) =>
+    segments(l.coords).map((s, i) => [
+      l.name,
+      i + 1,
+      l.coords[i]![0],
+      l.coords[i]![1],
+      i === 0 ? '' : round(s.distance, 2),
+      round(s.cumulative, 2),
+      s.bearing === null ? '' : round(s.bearing, 1),
+      l.closed ? 'yes' : 'no',
+    ]),
+  );
+}
+
+const csvCell = (v: string | number) => {
+  const text = String(v);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
+
+export function toCsv(lines: ExportLine[]) {
+  return [TABLE_COLUMNS, ...tableRows(lines)].map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}
+
+/** Tabs and line breaks inside names become spaces (TSV has no quoting). */
+export function toTsv(lines: ExportLine[]) {
+  return (
+    [TABLE_COLUMNS, ...tableRows(lines)]
+      .map((r) => r.map((v) => String(v).replace(/[\t\r\n]+/g, ' ')).join('\t'))
+      .join('\n') + '\n'
+  );
+}
+
 export const FILE_TYPES: Record<FileKind, {label: string; ext: string; mime: string}> = {
   geojson: {label: 'GeoJSON', ext: 'geojson', mime: 'application/geo+json'},
   gpx: {label: 'GPX', ext: 'gpx', mime: 'application/gpx+xml'},
   kml: {label: 'KML', ext: 'kml', mime: 'application/vnd.google-earth.kml+xml'},
+  csv: {label: 'CSV (points)', ext: 'csv', mime: 'text/csv'},
+  tsv: {label: 'TSV (points)', ext: 'tsv', mime: 'text/tab-separated-values'},
 };
 
 export function exportFile(lines: ExportLine[], kind: FileKind, name: string) {
-  const content =
-    kind === 'gpx' ? toGpx(lines) : kind === 'kml' ? toKml(lines, name) : toGeoJsonFile(lines);
+  const nonEmpty = lines.filter((l) => l.coords.length);
+  const content = {
+    gpx: () => toGpx(nonEmpty),
+    kml: () => toKml(nonEmpty, name),
+    geojson: () => toGeoJsonFile(nonEmpty),
+    csv: () => toCsv(nonEmpty),
+    tsv: () => toTsv(nonEmpty),
+  }[kind]();
   const slug =
     name
       .normalize('NFD')

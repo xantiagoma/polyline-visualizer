@@ -1,14 +1,20 @@
 import {CheckIcon, SplineIcon, XIcon} from 'lucide-react';
 import {Button} from '@/components/ui/button';
-import {formatDistance, perimeter} from '@/lib/geo';
+import {perimeter, type UnitSystem} from '@/lib/geo';
+import {useUnits} from '@/lib/units';
 import type {LatLng} from '@/lib/polyline';
 import type {Line} from '@/lib/store';
 
 /** Slider position (0–100) ↔ tolerance on a log scale, 0.5 m to 1 km. */
 export const toleranceAt = (position: number) => 0.5 * 2000 ** (position / 100);
 
-const formatTolerance = (m: number) =>
-  m < 10 ? `${m.toFixed(1)} m` : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+function formatTolerance(m: number, system: UnitSystem) {
+  if (system === 'imperial') {
+    const ft = m / 0.3048;
+    return ft < 10 ? `${ft.toFixed(1)} ft` : ft < 5280 ? `${Math.round(ft)} ft` : `${(ft / 5280).toFixed(2)} mi`;
+  }
+  return m < 10 ? `${m.toFixed(1)} m` : m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+}
 
 /**
  * Floats over the map so the dashed preview stays visible while the slider
@@ -29,6 +35,7 @@ export function SimplifyPanel({
   onApply: () => void;
   onCancel: () => void;
 }) {
+  const {system, distance: formatDistance} = useUnits();
   const before = line.coords.length;
   const after = simplified.length;
   const saved = before ? Math.round((1 - after / before) * 100) : 0;
@@ -56,10 +63,10 @@ export function SimplifyPanel({
           value={position}
           onChange={(e) => onPositionChange(Number(e.target.value))}
           className="min-w-0 flex-1 accent-primary"
-          aria-valuetext={formatTolerance(toleranceAt(position))}
+          aria-valuetext={formatTolerance(toleranceAt(position), system)}
         />
         <span className="w-16 shrink-0 text-right font-mono text-xs tabular">
-          {formatTolerance(toleranceAt(position))}
+          {formatTolerance(toleranceAt(position), system)}
         </span>
       </label>
       <p className="mt-2 text-xs text-muted-foreground tabular" aria-live="polite">

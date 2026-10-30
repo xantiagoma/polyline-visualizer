@@ -19,13 +19,23 @@ format at a time and stays in sync with the map.
 - Zones (closed shapes): draw them, toggle any line closed, or paste a ring
   (first point repeated at the end), a GeoJSON Polygon/MultiPolygon or a KML
   polygon. Filled on the map with area and perimeter; written back with the
-  closing point (Polygon in GeoJSON). Holes are not supported.
+  closing point (Polygon in GeoJSON). Holes are not supported. Areas show in
+  m², ha or km² automatically, or always in one unit.
+- Units: metric (m, km) or imperial/US (ft, mi; ft², acres, mi²), for every
+  distance, area, the simplify tolerance and the map's scale bar. Lengths
+  and perimeters, and zone areas, can each be fixed to one unit. US English
+  browsers start in imperial; the choice is remembered per browser.
 - Simplify (Douglas–Peucker) with a tolerance slider in metres and a dashed
   preview before applying.
 - Points and segments: every point with segment length, running total and
   bearing; edit or delete coordinates, hover to ring a point on the map.
-- Import GPX, KML, GeoJSON or text by dropping files anywhere (or from the
-  menu); download one line or all as GeoJSON, GPX or KML.
+  Download the table as CSV or TSV (metres and degrees).
+- Import GPX, KML, GeoJSON, CSV/TSV (lat/lng columns, optional line and
+  zone columns; comma, tab or semicolon) or text by dropping files anywhere
+  (or from the menu); download one line or all as GeoJSON, GPX, KML, or a CSV/TSV of points
+  (line, point, lat, lng, segment, running total, bearing, zone).
+- Reorder lines by dragging the grip, with Move up/down in the card menu, or
+  Alt+↑/↓ (keyboard drag: Space, arrows, Space).
 - Add points to an existing line: “Add points” (on the map or a card), then
   click the map to extend it from its end or start; ⌫ undoes, Enter or Esc
   finishes. Also works to draw into an empty line.

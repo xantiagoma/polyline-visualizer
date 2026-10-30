@@ -21,10 +21,50 @@ export function lineLength(coords: LatLng[]) {
   return total;
 }
 
-export function formatDistance(metres: number) {
-  if (metres < 1000) return `${Math.round(metres)} m`;
-  const km = metres / 1000;
-  return `${km.toLocaleString('en', {maximumFractionDigits: km < 100 ? 2 : 0})} km`;
+export type UnitSystem = 'metric' | 'imperial';
+
+const FOOT = 0.3048;
+const MILE = 1609.344;
+
+export type LengthUnit = 'auto' | 'm' | 'km' | 'ft' | 'mi';
+
+export const LENGTH_UNITS: {value: LengthUnit; label: string; short: string}[] = [
+  {value: 'auto', label: 'Auto', short: 'Auto'},
+  {value: 'm', label: 'Metres', short: 'm'},
+  {value: 'km', label: 'Kilometres', short: 'km'},
+  {value: 'ft', label: 'Feet', short: 'ft'},
+  {value: 'mi', label: 'Miles', short: 'mi'},
+];
+
+/**
+ * A fixed unit, or `auto` by system: metric shows m below 1 km, then km;
+ * imperial (US) shows ft below 0.1 mi (528 ft), then mi.
+ */
+export function formatDistance(
+  metres: number,
+  system: UnitSystem = 'metric',
+  unit: LengthUnit = 'auto',
+): string {
+  switch (unit) {
+    case 'm':
+      return inUnit(metres, 'm', 0);
+    case 'km':
+      return inUnit(metres / 1000, 'km', 2);
+    case 'ft':
+      return inUnit(metres / FOOT, 'ft', 0);
+    case 'mi':
+      return inUnit(metres / MILE, 'mi', 2);
+    case 'auto': {
+      if (system === 'imperial') {
+        const miles = metres / MILE;
+        if (miles < 0.1) return formatDistance(metres, system, 'ft');
+        return inUnit(miles, 'mi', miles < 100 ? 2 : 0);
+      }
+      if (metres < 1000) return formatDistance(metres, system, 'm');
+      const km = metres / 1000;
+      return inUnit(km, 'km', km < 100 ? 2 : 0);
+    }
+  }
 }
 
 export const formatCount = (n: number) =>
@@ -68,13 +108,62 @@ export function ringArea(coords: LatLng[]) {
   return Math.abs((total * EARTH_RADIUS_M * EARTH_RADIUS_M) / 2);
 }
 
-export function formatArea(m2: number) {
-  if (m2 < 10_000) return `${Math.round(m2).toLocaleString('en')} m²`;
-  if (m2 < 1_000_000) {
-    return `${(m2 / 10_000).toLocaleString('en', {maximumFractionDigits: 2})} ha`;
+export type AreaUnit = 'auto' | 'm2' | 'ha' | 'km2' | 'ft2' | 'ac' | 'mi2';
+
+export const AREA_UNITS: {value: AreaUnit; label: string; short: string}[] = [
+  {value: 'auto', label: 'Auto', short: 'Auto'},
+  {value: 'm2', label: 'Square metres', short: 'm²'},
+  {value: 'ha', label: 'Hectares', short: 'ha'},
+  {value: 'km2', label: 'Square kilometres', short: 'km²'},
+  {value: 'ft2', label: 'Square feet', short: 'ft²'},
+  {value: 'ac', label: 'Acres', short: 'ac'},
+  {value: 'mi2', label: 'Square miles', short: 'mi²'},
+];
+
+const SQ_FOOT = FOOT * FOOT;
+const ACRE = 4046.8564224;
+const SQ_MILE = MILE * MILE;
+
+/** Below 1, three significant digits (0.0123 km²) so small areas stay visible. */
+function inUnit(value: number, suffix: string, decimals: number) {
+  const options =
+    value !== 0 && value < 1
+      ? {maximumSignificantDigits: 3}
+      : {maximumFractionDigits: decimals};
+  return `${value.toLocaleString('en', options)} ${suffix}`;
+}
+
+/**
+ * `auto` follows the unit system: m² below 1 ha, ha below 1 km², then km²;
+ * or ft² below 1 acre, acres below 1 mi², then mi².
+ */
+export function formatArea(m2: number, unit: AreaUnit = 'auto', system: UnitSystem = 'metric'): string {
+  switch (unit) {
+    case 'm2':
+      return inUnit(m2, 'm²', 0);
+    case 'ha':
+      return inUnit(m2 / 10_000, 'ha', 2);
+    case 'km2':
+      return inUnit(m2 / 1_000_000, 'km²', 2);
+    case 'ft2':
+      return inUnit(m2 / SQ_FOOT, 'ft²', 0);
+    case 'ac':
+      return inUnit(m2 / ACRE, 'ac', 2);
+    case 'mi2':
+      return inUnit(m2 / SQ_MILE, 'mi²', 2);
+    case 'auto': {
+      if (system === 'imperial') {
+        if (m2 < ACRE) return formatArea(m2, 'ft2');
+        if (m2 < SQ_MILE) return formatArea(m2, 'ac');
+        const mi2 = m2 / SQ_MILE;
+        return inUnit(mi2, 'mi²', mi2 < 100 ? 2 : 0);
+      }
+      if (m2 < 10_000) return formatArea(m2, 'm2');
+      if (m2 < 1_000_000) return formatArea(m2, 'ha');
+      const km2 = m2 / 1_000_000;
+      return inUnit(km2, 'km²', km2 < 100 ? 2 : 0);
+    }
   }
-  const km2 = m2 / 1_000_000;
-  return `${km2.toLocaleString('en', {maximumFractionDigits: km2 < 100 ? 2 : 0})} km²`;
 }
 
 /** Initial bearing from a to b, in degrees clockwise from north (0–360). */
