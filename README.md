@@ -16,6 +16,16 @@ format at a time and stays in sync with the map.
   become separate lines.
 - Draw new lines on the map, drag vertices, drag a midpoint to insert a
   vertex, right-click a vertex to delete it. Start/end markers.
+- Zones (closed shapes): draw them, toggle any line closed, or paste a ring
+  (first point repeated at the end), a GeoJSON Polygon/MultiPolygon or a KML
+  polygon. Filled on the map with area and perimeter; written back with the
+  closing point (Polygon in GeoJSON). Holes are not supported.
+- Simplify (Douglas–Peucker) with a tolerance slider in metres and a dashed
+  preview before applying.
+- Points and segments: every point with segment length, running total and
+  bearing; edit or delete coordinates, hover to ring a point on the map.
+- Import GPX, KML, GeoJSON or text by dropping files anywhere (or from the
+  menu); download one line or all as GeoJSON, GPX or KML.
 - Add points to an existing line: “Add points” (on the map or a card), then
   click the map to extend it from its end or start; ⌫ undoes, Enter or Esc
   finishes. Also works to draw into an empty line.

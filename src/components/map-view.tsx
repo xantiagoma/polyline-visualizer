@@ -4,6 +4,7 @@ import type {GeoJSONSource, StyleSpecification} from 'maplibre-gl';
 import {
   TerraDraw,
   TerraDrawLineStringMode,
+  TerraDrawPolygonMode,
   TerraDrawRenderMode,
   TerraDrawSelectMode,
   type GeoJSONStoreFeatures,
@@ -13,7 +14,7 @@ import {TerraDrawMapLibreGLAdapter} from 'terra-draw-maplibre-gl-adapter';
 import {bounds} from '@/lib/geo';
 import type {Place} from '@/lib/places';
 import type {LatLng} from '@/lib/polyline';
-import type {Line, State} from '@/lib/store';
+import type {DrawKind, Line, State} from '@/lib/store';
 
 export type Basemap = 'light' | 'dark' | 'satellite';
 
@@ -59,6 +60,10 @@ maplibregl.setWorkerUrl(`/vendor/maplibre-gl-worker-${maplibregl.getVersion()}.m
 const OWN = /^(td-|pv-)/;
 const ENDPOINTS = 'pv-endpoints';
 const PREVIEW = 'pv-extend-preview';
+/** Simplification preview: the candidate line, dashed, with its vertices. */
+const GHOST = 'pv-ghost';
+/** A point hovered in the points table. */
+const HIGHLIGHT = 'pv-highlight';
 const EMPTY: GeoJSON.FeatureCollection = {type: 'FeatureCollection', features: []};
 const FIT = {padding: {top: 72, bottom: 48, left: 48, right: 64}, maxZoom: 17};
 
@@ -72,11 +77,32 @@ const sameCoords = (a: number[][], b: number[][]) =>
   a.length === b.length &&
   a.every((p, i) => Math.abs(p[0]! - b[i]![0]!) < 1e-9 && Math.abs(p[1]! - b[i]![1]!) < 1e-9);
 
+/** Lines of 2+ points and zones of 3+ are drawn; zones as polygons. */
+const drawable = (l: Line) => !l.hidden && l.coords.length >= (l.closed ? 3 : 2);
+
+function geometryOf(line: Line): GeoJSONStoreFeatures['geometry'] {
+  const positions = line.coords.map(toPosition);
+  return line.closed
+    ? {type: 'Polygon', coordinates: [[...positions, positions[0]!]]}
+    : {type: 'LineString', coordinates: positions};
+}
+
+/** A Terra Draw feature back to our coordinates (rings lose the closing point). */
+function coordsOf(feature: GeoJSONStoreFeatures): LatLng[] | null {
+  const {geometry} = feature;
+  if (geometry.type === 'LineString') return (geometry.coordinates as number[][]).map(fromPosition);
+  if (geometry.type === 'Polygon') {
+    return (geometry.coordinates[0] as number[][]).slice(0, -1).map(fromPosition);
+  }
+  return null;
+}
+
 function endpoints(lines: Line[]): GeoJSON.FeatureCollection<GeoJSON.Point> {
   return {
     type: 'FeatureCollection',
     features: lines.flatMap((line) => {
-      if (line.hidden || line.coords.length === 0) return [];
+      // Zones have no direction worth marking.
+      if (line.hidden || line.coords.length === 0 || line.closed) return [];
       const point = (coords: LatLng, kind: 'start' | 'end') => ({
         type: 'Feature' as const,
         properties: {kind, color: line.color},
@@ -99,6 +125,39 @@ function addOwnLayers(map: maplibregl.Map) {
     source: PREVIEW,
     layout: {'line-cap': 'round'},
     paint: {'line-color': ['get', 'color'], 'line-width': 3, 'line-dasharray': [1.5, 1.5]},
+  });
+  map.addSource(GHOST, {type: 'geojson', data: EMPTY});
+  map.addLayer({
+    id: GHOST,
+    type: 'line',
+    source: GHOST,
+    filter: ['==', ['geometry-type'], 'LineString'],
+    layout: {'line-cap': 'round', 'line-join': 'round'},
+    paint: {'line-color': ['get', 'color'], 'line-width': 3, 'line-dasharray': [2, 1.5]},
+  });
+  map.addLayer({
+    id: `${GHOST}-points`,
+    type: 'circle',
+    source: GHOST,
+    filter: ['==', ['geometry-type'], 'Point'],
+    paint: {
+      'circle-radius': 3.5,
+      'circle-color': '#ffffff',
+      'circle-stroke-color': ['get', 'color'],
+      'circle-stroke-width': 2,
+    },
+  });
+  map.addSource(HIGHLIGHT, {type: 'geojson', data: EMPTY});
+  map.addLayer({
+    id: HIGHLIGHT,
+    type: 'circle',
+    source: HIGHLIGHT,
+    paint: {
+      'circle-radius': 10,
+      'circle-color': 'rgba(255,255,255,0.35)',
+      'circle-stroke-color': ['get', 'color'],
+      'circle-stroke-width': 3,
+    },
   });
   map.addSource(ENDPOINTS, {type: 'geojson', data: EMPTY});
   map.addLayer({
@@ -130,16 +189,22 @@ function keepOwnLayers(previous: StyleSpecification | undefined, next: StyleSpec
 type Props = {
   lines: Line[];
   selectedId: string | null;
-  drawing: boolean;
+  drawing: DrawKind | false;
   extending: State['extending'];
   drawColor: string;
   basemap: Basemap;
   fit: State['fit'];
   /** A searched place to fly to and mark; `n` changes on every pick. */
   place: {place: Place; n: number} | null;
+  /** Simplification preview for a line (dashed, with its points). */
+  ghost: {coords: LatLng[]; closed: boolean; color: string} | null;
+  /** A point to ring, e.g. the row hovered in the points table. */
+  highlight: {coords: LatLng; color: string} | null;
+  /** Fly to a point (e.g. from the points table); `n` changes per request. */
+  focus: {coords: LatLng; n: number} | null;
   /** Written with the map centre, for search bias. */
   centerRef: RefObject<[number, number] | null>;
-  onDrawn: (id: string, coords: LatLng[]) => void;
+  onDrawn: (id: string, coords: LatLng[], closed: boolean) => void;
   onEdited: (id: string, coords: LatLng[]) => void;
   onSelect: (id: string | null) => void;
   onExtendPoint: (coords: LatLng) => void;
@@ -156,6 +221,9 @@ export default function MapView({
   basemap,
   fit,
   place,
+  ghost,
+  highlight,
+  focus,
   centerRef,
   onDrawn,
   onEdited,
@@ -173,17 +241,17 @@ export default function MapView({
   const switchingMode = useRef(false);
 
   const handleFinish = useEffectEvent((draw: TerraDraw, id: string, mode: string) => {
+    if (mode !== 'linestring' && mode !== 'polygon') return;
     const feature = draw.getSnapshotFeature(id);
-    if (feature?.geometry.type !== 'LineString') return;
-    const coords = (feature.geometry.coordinates as number[][]).map(fromPosition);
-    if (mode === 'linestring') onDrawn(id, coords);
+    const coords = feature && coordsOf(feature);
+    if (coords) onDrawn(id, coords, mode === 'polygon');
   });
   const handleChange = useEffectEvent((draw: TerraDraw, ids: (string | number)[]) => {
     for (const id of ids) {
       if (typeof id !== 'string' || !known.current.has(id)) continue;
       const feature = draw.getSnapshotFeature(id);
-      if (feature?.geometry.type !== 'LineString') continue;
-      onEdited(id, (feature.geometry.coordinates as number[][]).map(fromPosition));
+      const coords = feature && coordsOf(feature);
+      if (coords) onEdited(id, coords);
     }
   });
   const handleSelect = useEffectEvent((id: string | null) => onSelect(id));
@@ -239,11 +307,31 @@ export default function MapView({
               coordinatePointWidth: 4,
             },
           }),
+          new TerraDrawPolygonMode({
+            styles: {
+              fillColor: colorOf,
+              fillOpacity: 0.2,
+              outlineColor: colorOf,
+              outlineWidth: 3,
+              closingPointColor: colorOf,
+              closingPointOutlineColor: '#ffffff',
+              closingPointWidth: 5,
+              coordinatePointColor: colorOf,
+              coordinatePointOutlineColor: '#ffffff',
+              coordinatePointWidth: 4,
+            },
+          }),
           // Inert mode while points are added by clicking (see below).
           new TerraDrawRenderMode({modeName: 'idle', styles: {}}),
           new TerraDrawSelectMode({
             flags: {
               linestring: {
+                feature: {
+                  draggable: true,
+                  coordinates: {midpoints: true, draggable: true, deletable: true},
+                },
+              },
+              polygon: {
                 feature: {
                   draggable: true,
                   coordinates: {midpoints: true, draggable: true, deletable: true},
@@ -255,6 +343,10 @@ export default function MapView({
             styles: {
               selectedLineStringColor: colorOf,
               selectedLineStringWidth: 6,
+              selectedPolygonColor: colorOf,
+              selectedPolygonFillOpacity: 0.3,
+              selectedPolygonOutlineColor: colorOf,
+              selectedPolygonOutlineWidth: 4,
               selectionPointColor: colorOf,
               selectionPointOutlineColor: '#ffffff',
               selectionPointWidth: 5,
@@ -312,35 +404,34 @@ export default function MapView({
     colors.current = new Map(lines.map((l) => [l.id, l.color]));
     known.current = new Set(lines.map((l) => l.id));
 
-    const visible = new Map(
-      lines.filter((l) => !l.hidden && l.coords.length >= 2).map((l) => [l.id, l]),
-    );
+    const visible = new Map(lines.filter(drawable).map((l) => [l.id, l]));
+    const modeOf = (l: Line) => (l.closed ? 'polygon' : 'linestring');
     const stale = draw
       .getSnapshot()
-      .filter(
-        (f) =>
-          f.properties.mode === 'linestring' &&
-          !f.properties.currentlyDrawing &&
-          !visible.has(String(f.id)),
-      )
+      .filter((f) => {
+        if (f.properties.mode !== 'linestring' && f.properties.mode !== 'polygon') return false;
+        if (f.properties.currentlyDrawing) return false;
+        const line = visible.get(String(f.id));
+        // A line toggled to a zone (or back) is re-added in the other mode.
+        return !line || modeOf(line) !== f.properties.mode;
+      })
       .map((f) => f.id!);
     if (stale.length) draw.removeFeatures(stale);
 
     for (const line of visible.values()) {
-      const coordinates = line.coords.map(toPosition);
+      const geometry = geometryOf(line);
       const existing = draw.getSnapshotFeature(line.id);
       if (!existing) {
         const [result] = draw.addFeatures([
-          {
-            id: line.id,
-            type: 'Feature',
-            geometry: {type: 'LineString', coordinates},
-            properties: {mode: 'linestring'},
-          },
+          {id: line.id, type: 'Feature', geometry, properties: {mode: modeOf(line)}},
         ]);
         if (result && !result.valid) console.warn('Line not drawn:', result.reason);
-      } else if (!sameCoords(existing.geometry.coordinates as number[][], coordinates)) {
-        draw.updateFeatureGeometry(line.id, {type: 'LineString', coordinates});
+      } else {
+        const ring = (g: GeoJSONStoreFeatures['geometry']) =>
+          (g.type === 'Polygon' ? g.coordinates[0] : g.coordinates) as number[][];
+        if (!sameCoords(ring(existing.geometry), ring(geometry))) {
+          draw.updateFeatureGeometry(line.id, geometry);
+        }
       }
     }
     (map.getSource(ENDPOINTS) as GeoJSONSource | undefined)?.setData(endpoints(lines));
@@ -350,7 +441,8 @@ export default function MapView({
   useEffect(() => {
     if (!instance) return;
     const {draw} = instance;
-    const mode = drawing ? 'linestring' : extending ? 'idle' : 'select';
+    const mode =
+      drawing === 'zone' ? 'polygon' : drawing ? 'linestring' : extending ? 'idle' : 'select';
     if (draw.getMode() !== mode) {
       switchingMode.current = true;
       draw.setMode(mode);
@@ -436,6 +528,53 @@ export default function MapView({
       marker.remove();
     };
   }, [instance, placeN, placeValue]);
+
+  const focusN = focus?.n;
+  const focusCoords = focus?.coords;
+  useEffect(() => {
+    if (!instance || !focusCoords) return;
+    const {map} = instance;
+    map.flyTo({center: toPosition(focusCoords) as [number, number], zoom: Math.max(map.getZoom(), 16)});
+  }, [instance, focusN, focusCoords]);
+
+  // Simplification preview and the hovered table row.
+  useEffect(() => {
+    const source = instance?.map.getSource(GHOST) as GeoJSONSource | undefined;
+    if (!source) return;
+    if (!ghost || ghost.coords.length === 0) {
+      source.setData(EMPTY);
+      return;
+    }
+    const ring = ghost.closed ? [...ghost.coords, ghost.coords[0]!] : ghost.coords;
+    source.setData({
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          properties: {color: ghost.color},
+          geometry: {type: 'LineString', coordinates: ring.map(toPosition)},
+        },
+        ...ghost.coords.map((c) => ({
+          type: 'Feature' as const,
+          properties: {color: ghost.color},
+          geometry: {type: 'Point' as const, coordinates: toPosition(c)},
+        })),
+      ],
+    });
+  }, [instance, ghost]);
+  useEffect(() => {
+    const source = instance?.map.getSource(HIGHLIGHT) as GeoJSONSource | undefined;
+    if (!source) return;
+    source.setData(
+      highlight
+        ? {
+            type: 'Feature',
+            properties: {color: highlight.color},
+            geometry: {type: 'Point', coordinates: toPosition(highlight.coords)},
+          }
+        : EMPTY,
+    );
+  }, [instance, highlight]);
 
   // MapLibre's stylesheet sets .maplibregl-map to position: relative (and it
   // is not in a cascade layer), so the map fills a positioned wrapper.

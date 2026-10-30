@@ -20,10 +20,31 @@ export const formatLabel = (format: Format) =>
   FORMATS.find((f) => f.value === format)!.label;
 
 /** One parsed line; `name` comes from a GeoJSON feature's properties. */
-export type ParsedLine = {coords: LatLng[]; name?: string};
+/**
+ * One parsed line; `name` comes from a GeoJSON feature's properties. A closed
+ * line (a zone) keeps its ring without the repeated first point.
+ */
+export type ParsedLine = {coords: LatLng[]; name?: string; closed?: boolean};
+
+const samePoint = (a: LatLng, b: LatLng) => a[0] === b[0] && a[1] === b[1];
+
+/**
+ * Encoded polylines and arrays have no polygon type: a ring is written with
+ * its first point repeated at the end (as Google Maps does). Four points is
+ * the smallest ring (a triangle plus the closing point).
+ */
+export function detectRing(coords: LatLng[]): ParsedLine {
+  return coords.length >= 4 && samePoint(coords[0]!, coords.at(-1)!)
+    ? {coords: coords.slice(0, -1), closed: true}
+    : {coords};
+}
+
+/** The ring as written in text: the first point repeated at the end. */
+export const ringOf = (coords: LatLng[], closed?: boolean) =>
+  closed && coords.length > 0 ? [...coords, coords[0]!] : coords;
 
 export type ParseResult =
-  | {ok: true; lines: ParsedLine[]}
+  | {ok: true; lines: ParsedLine[]; notes?: string[]}
   | {ok: false; error: string; precision?: Precision};
 
 const fail = (error: string, precision?: Precision): ParseResult => ({
@@ -87,7 +108,7 @@ function parseEncoded(text: string, precision: Precision): ParseResult {
           )
         : fail(error);
     }
-    lines.push({coords});
+    lines.push(detectRing(coords));
   }
   return {ok: true, lines: lines.length ? lines : [{coords: []}]};
 }
@@ -156,7 +177,7 @@ function parseArray(text: string, order: 'latlng' | 'lnglat'): ParseResult {
       const other = order === 'latlng' ? 'LngLat' : 'LatLng';
       return fail(`${error} Maybe the pairs are in ${other} order?`);
     }
-    lines.push({coords});
+    lines.push(detectRing(coords));
   }
   return {ok: true, lines};
 }
@@ -169,15 +190,28 @@ function collectGeoJson(
   skipped: Set<string>,
   name?: string,
 ): string | null {
-  const positions = (coords: unknown, label: string) => {
+  const positions = (coords: unknown, label: string, ring = false) => {
     if (!Array.isArray(coords) || !coords.every(isPosition)) {
       return `${label} coordinates must be an array of [lng, lat] positions.`;
     }
-    lines.push({
-      coords: coords.map(([lng, lat]) => [lat!, lng!] as LatLng),
-      name,
-    });
+    let latLngs = coords.map(([lng, lat]) => [lat!, lng!] as LatLng);
+    if (ring) {
+      // GeoJSON rings repeat the first position; keep one copy.
+      if (latLngs.length > 1 && samePoint(latLngs[0]!, latLngs.at(-1)!)) {
+        latLngs = latLngs.slice(0, -1);
+      }
+      if (latLngs.length < 3) return `${label} rings need at least 3 distinct positions.`;
+    }
+    lines.push({coords: latLngs, name, ...(ring && {closed: true})});
     return null;
+  };
+  const polygon = (rings: unknown, label: string) => {
+    if (!Array.isArray(rings) || rings.length === 0) {
+      return `${label} coordinates must be an array of rings.`;
+    }
+    // Holes (inner rings) are not supported; only the outline is kept.
+    if (rings.length > 1) skipped.add('holes');
+    return positions(rings[0], label, true);
   };
   switch (node.type) {
     case 'LineString':
@@ -215,10 +249,20 @@ function collectGeoJson(
         if (error) return error;
       }
       return null;
+    case 'Polygon':
+      return polygon(node.coordinates, 'Polygon');
+    case 'MultiPolygon': {
+      if (!Array.isArray(node.coordinates)) {
+        return 'MultiPolygon coordinates must be an array of polygons.';
+      }
+      for (const rings of node.coordinates) {
+        const error = polygon(rings, 'MultiPolygon');
+        if (error) return error;
+      }
+      return null;
+    }
     case 'Point':
     case 'MultiPoint':
-    case 'Polygon':
-    case 'MultiPolygon':
       skipped.add(node.type);
       return null;
     default:
@@ -237,18 +281,22 @@ function parseGeoJson(text: string): ParseResult {
   const skipped = new Set<string>();
   const error = collectGeoJson(value as GeoJsonLike, lines, skipped);
   if (error) return fail(error);
+  const points = [...skipped].filter((t) => t !== 'holes');
   if (lines.length === 0) {
     return fail(
-      skipped.size
-        ? `No lines found (only ${[...skipped].join(', ')}). Polylines need a LineString or MultiLineString.`
-        : 'No lines found. Polylines need a LineString or MultiLineString.',
+      points.length
+        ? `No lines found (only ${points.join(', ')}). Use a LineString, Polygon or their Multi* variants.`
+        : 'No lines found. Use a LineString, Polygon or their Multi* variants.',
     );
   }
   for (const [i, line] of lines.entries()) {
     const error = rangeError(line.coords, i, lines.length > 1);
     if (error) return fail(error);
   }
-  return {ok: true, lines};
+  const notes = skipped.has('holes')
+    ? ['Polygon holes are not supported; only the outlines were kept.']
+    : undefined;
+  return {ok: true, lines, ...(notes && {notes})};
 }
 
 /**
@@ -299,14 +347,14 @@ function pairsArray(coords: LatLng[], order: 'latlng' | 'lnglat', indent = '') {
   return `[\n${rows.map((r) => `${indent}  ${r}`).join(',\n')}\n${indent}]`;
 }
 
-export function toGeoJsonFeature(coords: LatLng[], name?: string) {
+export function toGeoJsonFeature(coords: LatLng[], name?: string, closed?: boolean) {
+  const positions = ringOf(coords, closed).map(([lat, lng]) => [clean(lng), clean(lat)]);
   return {
     type: 'Feature' as const,
     properties: name ? {name} : {},
-    geometry: {
-      type: 'LineString' as const,
-      coordinates: coords.map(([lat, lng]) => [clean(lng), clean(lat)]),
-    },
+    geometry: closed
+      ? {type: 'Polygon' as const, coordinates: [positions]}
+      : {type: 'LineString' as const, coordinates: positions},
   };
 }
 
@@ -323,39 +371,43 @@ export function serialize(
   format: Format,
   precision: Precision,
   name?: string,
+  closed?: boolean,
 ): string {
   if (coords.length === 0) return '';
   switch (format) {
     case 'encoded':
-      return encode(coords, precision);
+      return encode(ringOf(coords, closed), precision);
     case 'latlng':
     case 'lnglat':
-      return pairsArray(coords, format);
+      return pairsArray(ringOf(coords, closed), format);
     case 'geojson':
-      return stringifyGeoJson(toGeoJsonFeature(coords, name));
+      return stringifyGeoJson(toGeoJsonFeature(coords, name, closed));
   }
 }
 
+type NamedLine = {coords: LatLng[]; name: string; closed?: boolean};
+
 /** Every line as one document, for "copy all". */
 export function serializeAll(
-  lines: {coords: LatLng[]; name: string}[],
+  lines: NamedLine[],
   format: Format,
   precision: Precision,
 ): string {
   const nonEmpty = lines.filter((l) => l.coords.length > 0);
   if (nonEmpty.length === 0) return '';
+  const rings = nonEmpty.map((l) => ringOf(l.coords, l.closed));
   switch (format) {
     case 'encoded':
-      return nonEmpty.map((l) => encode(l.coords, precision)).join('\n');
+      return rings.map((r) => encode(r, precision)).join('\n');
     case 'latlng':
     case 'lnglat':
-      return nonEmpty.length === 1
-        ? pairsArray(nonEmpty[0]!.coords, format)
-        : `[\n${nonEmpty.map((l) => `  ${pairsArray(l.coords, format, '  ')}`).join(',\n')}\n]`;
+      return rings.length === 1
+        ? pairsArray(rings[0]!, format)
+        : `[\n${rings.map((r) => `  ${pairsArray(r, format, '  ')}`).join(',\n')}\n]`;
     case 'geojson':
       return stringifyGeoJson({
         type: 'FeatureCollection',
-        features: nonEmpty.map((l) => toGeoJsonFeature(l.coords, l.name)),
+        features: nonEmpty.map((l) => toGeoJsonFeature(l.coords, l.name, l.closed)),
       });
   }
 }

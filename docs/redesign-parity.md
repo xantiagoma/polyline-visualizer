@@ -50,6 +50,10 @@ px and desktop.
 | Extend a line from its end or start (Add points mode, ⌫ undo, Enter/Esc) | store `extend`/`addPoint`/`removePoint`, `ExtendBanner`, `MapView` | T, B (3 → 5 points, ⌫ → 4, selection kept after Done) |
 | Shareable URL in the hash, copy link, copy all, FeatureCollection | lib/url-state.ts, More menu | T, B |
 | `{lat, lng}` objects, elevation values, quoted encoded strings | lib/formats.ts | T |
+| Zones: toggle closed, draw zone, ring/Polygon/KML detection, fill, area and perimeter, `z` in the URL | lib/formats.ts `detectRing`, store `toggleClosed`, `MapView` polygon mode | T, B (drawn zone → "Zone · 4 points · 6.08 km²", `z=0,2`) |
+| Simplify with tolerance and dashed preview | lib/geo.ts `simplify`, `SimplifyPanel` | T, B (120 → 22 points at 4.9 m) |
+| Points and segments table (edit, delete, hover highlight, fly to point) | lib/geo.ts `segments`, `PointsPanel` | T, B (desktop and 390 px) |
+| Import GPX/KML/GeoJSON/text by drop or picker; download GeoJSON/GPX/KML | lib/files.ts, App drop zone, menus | T (lib/files.test.ts), B (dropped KML zone + GPX track) |
 | Place search (Photon, `/` shortcut, marker, biased to the map centre) | lib/places.ts, `PlaceSearch`, `MapView` | T (lib/places.test.ts), B (“parque berrio medellin” → flies to Parque Berrío, marker removable) |
 | Satellite view (Esri World Imagery + roads/places), saved per browser | `MapView` `STYLES.satellite`, map toolbar toggle | B (lines kept across switches, attribution shown) |
 | Light / dark / system theme, basemap follows | lib/theme.ts, `setStyle` keeping draw layers | B |

@@ -6,7 +6,9 @@ import {initialState, type State} from './store';
  * The shareable state lives in the URL hash so long polylines never hit
  * request-line limits: `#f=latlng&pr=6&l=<encoded>&l=<encoded>&n=Route`.
  * `f` and `pr` are omitted at their defaults (encoded, 5); `n` is present only
- * when a line has a custom name, aligned with `l`. Empty lines are skipped.
+ * when a line has a custom name, aligned with `l`; `z` lists the indexes of
+ * zones (closed lines, encoded without the repeated first point). Empty
+ * lines are skipped.
  */
 export function toHash(state: State): string {
   const params = new URLSearchParams();
@@ -17,6 +19,8 @@ export function toHash(state: State): string {
   if (lines.some((l, i) => l.name !== `Line ${i + 1}`)) {
     for (const line of lines) params.append('n', line.name);
   }
+  const zones = lines.flatMap((l, i) => (l.closed ? [i] : []));
+  if (zones.length) params.set('z', zones.join(','));
   const query = params.toString();
   return query ? `#${query}` : '';
 }
@@ -27,11 +31,12 @@ export function fromHash(hash: string): State {
   const format: Format = FORMATS.some((x) => x.value === f) ? (f as Format) : 'encoded';
   const precision: Precision = params.get('pr') === '6' ? 6 : 5;
   const names = params.getAll('n');
+  const zones = new Set((params.get('z') ?? '').split(',').filter(Boolean).map(Number));
   const lines = params.getAll('l').flatMap((encoded, i) => {
     try {
       const coords = decode(encoded, precision);
       if (coords.length === 0 || firstOutOfRange(coords) !== -1) return [];
-      return [{coords, name: names[i]?.trim() || undefined}];
+      return [{coords, name: names[i]?.trim() || undefined, closed: zones.has(i)}];
     } catch {
       return [];
     }

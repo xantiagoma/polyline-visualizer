@@ -91,12 +91,12 @@ describe('reducer', () => {
   });
 
   test('drawing fills the empty selected line, then adds new ones', () => {
-    let s = reducer(initialState(), {type: 'setDrawing', drawing: true});
-    s = reducer(s, {type: 'drawn', id: 'a', coords: COORDS});
+    let s = reducer(initialState(), {type: 'setDrawing', drawing: 'line'});
+    s = reducer(s, {type: 'drawn', id: 'a', coords: COORDS, closed: false});
     expect(s.lines).toHaveLength(1);
     expect(s.lines[0]!.id).toBe('a');
     expect(s.drawing).toBe(false);
-    s = reducer(s, {type: 'drawn', id: 'b', coords: COORDS});
+    s = reducer(s, {type: 'drawn', id: 'b', coords: COORDS, closed: true});
     expect(s.lines.map((l) => l.id)).toEqual(['a', 'b']);
     expect(s.selectedId).toBe('b');
   });
@@ -167,7 +167,7 @@ describe('extending a line', () => {
     expect(s.lines[0]!.coords).toEqual([[37, -119], ...COORDS, [41, -121]]);
     s = reducer(s, {type: 'removePoint'});
     expect(s.lines[0]!.coords[0]).toEqual(COORDS[0]!);
-    s = reducer(s, {type: 'setDrawing', drawing: true});
+    s = reducer(s, {type: 'setDrawing', drawing: 'line'});
     expect(s.extending).toBeNull();
   });
 
@@ -180,4 +180,104 @@ describe('extending a line', () => {
     expect(s.lines[0]!.coords).toEqual([[1, 2], [3, 4]]);
     expect(reducer(s, {type: 'remove', id}).extending).toBeNull();
   });
+});
+
+describe('geo extras', () => {
+  test('area, perimeter, bearing and segments', async () => {
+    const {bearing, compass, formatArea, perimeter, ringArea, segments} = await import('./geo');
+    // A 0.01° square at the equator is about 1.236 km².
+    const square: LatLng[] = [
+      [0, 0],
+      [0, 0.01],
+      [0.01, 0.01],
+      [0.01, 0],
+    ];
+    expect(ringArea(square)).toBeGreaterThan(1_230_000);
+    expect(ringArea(square)).toBeLessThan(1_240_000);
+    expect(formatArea(ringArea(square))).toBe('1.24 km²');
+    expect(formatArea(5_000)).toBe('5,000 m²');
+    expect(formatArea(50_000)).toBe('5 ha');
+    expect(perimeter(square, true)).toBeCloseTo(4 * 1111.95, -1);
+    expect(perimeter(square, false)).toBeCloseTo(3 * 1111.95, -1);
+    expect(Math.round(bearing([0, 0], [0, 1]))).toBe(90);
+    expect(compass(bearing([0, 0], [1, 0]))).toBe('N');
+    const segs = segments(square);
+    expect(segs[0]).toEqual({distance: 0, cumulative: 0, bearing: null});
+    expect(segs[3]!.cumulative).toBeCloseTo(perimeter(square, false), 6);
+  });
+
+  test('simplify keeps ends, drops points within tolerance', async () => {
+    const {simplify} = await import('./geo');
+    // Points along a straight meridian, with one 50 m bump.
+    const line: LatLng[] = Array.from({length: 11}, (_, i) => [i * 0.001, i === 5 ? 0.00045 : 0]);
+    const loose = simplify(line, 100);
+    expect(loose).toEqual([line[0]!, line[10]!]);
+    const tight = simplify(line, 10);
+    expect(tight).toEqual([line[0]!, line[4]!, line[5]!, line[6]!, line[10]!]);
+    expect(simplify(line, 0)).toBe(line);
+    const ring: LatLng[] = [
+      [0, 0],
+      [0, 0.000001],
+      [0, 0.01],
+      [0.01, 0.01],
+      [0.01, 0],
+    ];
+    expect(simplify(ring, 5, true)).toHaveLength(4);
+  });
+});
+
+describe('zones and point edits', () => {
+  const RING: LatLng[] = [
+    [0, 0],
+    [0, 1],
+    [1, 1],
+  ];
+
+  test('typing a ring marks the line closed; toggling keeps the shape', () => {
+    let s = initialState();
+    const id = s.lines[0]!.id;
+    s = input(s, id, encode([...RING, RING[0]!]));
+    expect(s.lines[0]!.closed).toBe(true);
+    expect(s.lines[0]!.coords).toEqual(RING);
+    s = reducer(s, {type: 'toggleClosed', id});
+    expect(s.lines[0]!.closed).toBe(false);
+    expect(s.lines[0]!.coords).toEqual([...RING, RING[0]!]);
+    s = reducer(s, {type: 'toggleClosed', id});
+    expect(s.lines[0]!.coords).toEqual(RING);
+  });
+
+  test('zones survive the URL', () => {
+    let s = initialState([{coords: COORDS}, {coords: RING, closed: true}]);
+    const hash = toHash(s);
+    expect(hash).toContain('z=1');
+    expect(fromHash(hash).lines.map((l) => l.closed)).toEqual([false, true]);
+    expect(fromHash(hash).lines[1]!.coords).toEqual(RING);
+  });
+
+  test('set and delete points', () => {
+    let s = initialState([{coords: RING}]);
+    const id = s.lines[0]!.id;
+    s = reducer(s, {type: 'setPoint', id, index: 1, coords: [5, 5]});
+    expect(s.lines[0]!.coords[1]).toEqual([5, 5]);
+    s = reducer(s, {type: 'deletePoint', id, index: 0});
+    expect(s.lines[0]!.coords).toEqual([[5, 5], [1, 1]]);
+  });
+
+  test('import replaces the lone empty line and fits the new ones', () => {
+    let s = initialState();
+    s = reducer(s, {type: 'import', lines: [{coords: RING, closed: true, name: 'Park'}, {coords: COORDS}]});
+    expect(s.lines.map((l) => [l.name, l.closed])).toEqual([
+      ['Park', true],
+      ['Line 1', false],
+    ]);
+    expect(s.fit.ids).toHaveLength(2);
+    s = reducer(s, {type: 'import', lines: [{coords: COORDS}]});
+    expect(s.lines).toHaveLength(3);
+  });
+});
+
+test('new zones are named Zone N', () => {
+  let s = initialState([{coords: COORDS}]);
+  s = reducer(s, {type: 'drawn', id: 'z', coords: [[0, 0], [0, 1], [1, 1]], closed: true});
+  expect(s.lines.at(-1)!.name).toBe('Zone 1');
 });

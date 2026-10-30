@@ -9,16 +9,19 @@ export type Line = {
   /** Text being edited; `null` means the text is derived from `coords`. */
   draft: string | null;
   hidden: boolean;
+  /** A zone: the last point connects back to the first. */
+  closed: boolean;
 };
 
 export type LineEnd = 'start' | 'end';
+export type DrawKind = 'line' | 'zone';
 
 export type State = {
   lines: Line[];
   format: Format;
   precision: Precision;
   selectedId: string | null;
-  drawing: boolean;
+  drawing: DrawKind | false;
   /** Adding points to an existing line by clicking the map. */
   extending: {id: string; end: LineEnd} | null;
   /** Bumped when the map should fit these lines (null = every line). */
@@ -58,13 +61,13 @@ function nextColor(lines: Line[]) {
   );
 }
 
-function nextName(lines: Line[]) {
+function nextName(lines: Line[], prefix: 'Line' | 'Zone') {
   const used = new Set(lines.map((l) => l.name));
   let n = lines.length + 1;
   for (let k = 1; k <= n; k++) {
-    if (!used.has(`Line ${k}`)) return `Line ${k}`;
+    if (!used.has(`${prefix} ${k}`)) return `${prefix} ${k}`;
   }
-  return `Line ${n}`;
+  return `${prefix} ${n}`;
 }
 
 export function makeLine(
@@ -73,13 +76,16 @@ export function makeLine(
 ): Line {
   return {
     id: init.id ?? newId(),
-    name: init.name ?? nextName(lines),
+    name: init.name ?? nextName(lines, init.closed ? 'Zone' : 'Line'),
     color: init.color ?? nextColor(lines),
     coords: init.coords ?? [],
     draft: init.draft ?? null,
     hidden: init.hidden ?? false,
+    closed: init.closed ?? false,
   };
 }
+
+const fromParsed = (p: ParsedLine) => ({coords: p.coords, name: p.name, closed: !!p.closed});
 
 export function initialState(
   lines: ParsedLine[] = [],
@@ -88,7 +94,7 @@ export function initialState(
 ): State {
   const built: Line[] = [];
   for (const parsed of lines.length ? lines : [{coords: []}]) {
-    built.push(makeLine(built, {coords: parsed.coords, name: parsed.name}));
+    built.push(makeLine(built, fromParsed(parsed)));
   }
   return {
     lines: built,
@@ -121,7 +127,9 @@ export function interpretInput(
   detect: boolean,
 ): Interpreted {
   const result = parse(text, format, precision);
-  if (result.ok) return {format, precision, lines: result.lines};
+  if (result.ok) {
+    return {format, precision, lines: result.lines, notice: result.notes?.join(' ')};
+  }
   if (!detect) return {format, precision, lines: null};
 
   if (result.precision) {
@@ -165,12 +173,16 @@ export type Action =
   | {type: 'rename'; id: string; name: string}
   | {type: 'toggleHidden'; id: string}
   | {type: 'select'; id: string | null}
-  | {type: 'setDrawing'; drawing: boolean}
+  | {type: 'setDrawing'; drawing: DrawKind | false}
+  | {type: 'toggleClosed'; id: string}
+  | {type: 'setPoint'; id: string; index: number; coords: LatLng}
+  | {type: 'deletePoint'; id: string; index: number}
+  | {type: 'import'; lines: ParsedLine[]}
   | {type: 'extend'; id: string; end: LineEnd}
   | {type: 'stopExtending'}
   | {type: 'addPoint'; coords: LatLng}
   | {type: 'removePoint'}
-  | {type: 'drawn'; id: string; coords: LatLng[]}
+  | {type: 'drawn'; id: string; coords: LatLng[]; closed: boolean}
   | {type: 'edited'; id: string; coords: LatLng[]}
   | {type: 'fit'; ids: string[] | null}
   | {type: 'clear'}
@@ -215,6 +227,7 @@ export function reducer(state: State, action: Action): State {
           ...l,
           coords: first!.coords,
           name: first!.name ?? l.name,
+          closed: !!first!.closed,
           draft: action.text,
         }));
         return first!.coords.length ? fit(next, [action.id]) : next;
@@ -229,11 +242,12 @@ export function reducer(state: State, action: Action): State {
         ...current,
         coords: first!.coords,
         name: first!.name ?? current.name,
+        closed: !!first!.closed,
         draft: null,
       };
       const added: Line[] = [];
       for (const p of rest) {
-        added.push(makeLine([...lines, ...added], {coords: p.coords, name: p.name}));
+        added.push(makeLine([...lines, ...added], fromParsed(p)));
       }
       lines.splice(index + 1, 0, ...added);
       return fit({...settings, lines}, [current.id, ...added.map((l) => l.id)]);
@@ -255,7 +269,10 @@ export function reducer(state: State, action: Action): State {
         ? state
         : dropValidDrafts({...dropValidDrafts(state), precision: action.precision});
     case 'add': {
-      const line = makeLine(state.lines, {id: action.id, ...action.line});
+      const line = makeLine(state.lines, {
+        id: action.id,
+        ...(action.line && fromParsed(action.line)),
+      });
       const next = {...state, lines: [...state.lines, line], selectedId: line.id};
       return line.coords.length ? fit(next, [line.id]) : next;
     }
@@ -276,6 +293,50 @@ export function reducer(state: State, action: Action): State {
       return state.drawing === action.drawing
         ? state
         : {...state, drawing: action.drawing, extending: null};
+    case 'toggleClosed':
+      // Keep the shape on screen: opening a zone adds the closing point back
+      // as a real point; closing a loop drops its repeated end.
+      return update(state, action.id, (l) => {
+        const [first, last] = [l.coords[0], l.coords.at(-1)];
+        const loop =
+          l.coords.length >= 4 && first && last && first[0] === last[0] && first[1] === last[1];
+        const coords = l.closed
+          ? l.coords.length >= 2
+            ? [...l.coords, l.coords[0]!]
+            : l.coords
+          : loop
+            ? l.coords.slice(0, -1)
+            : l.coords;
+        return {...l, closed: !l.closed, coords, draft: null};
+      });
+    case 'setPoint':
+      return update(state, action.id, (l) => ({
+        ...l,
+        coords: l.coords.map((c, i) => (i === action.index ? action.coords : c)),
+        draft: null,
+      }));
+    case 'deletePoint':
+      return update(state, action.id, (l) => ({
+        ...l,
+        coords: l.coords.filter((_, i) => i !== action.index),
+        draft: null,
+      }));
+    case 'import': {
+      if (action.lines.length === 0) return state;
+      // A lone empty line (the starting state) is replaced, not kept.
+      const base =
+        state.lines.length === 1 &&
+        state.lines[0]!.coords.length === 0 &&
+        state.lines[0]!.draft === null
+          ? []
+          : state.lines;
+      const added: Line[] = [];
+      for (const p of action.lines) added.push(makeLine([...base, ...added], fromParsed(p)));
+      return fit(
+        {...state, lines: [...base, ...added], selectedId: added[0]!.id, drawing: false},
+        added.map((l) => l.id),
+      );
+    }
     case 'extend':
       return {
         ...update(state, action.id, (l) => ({...l, hidden: false})),
@@ -310,12 +371,21 @@ export function reducer(state: State, action: Action): State {
       );
       if (target) {
         return {
-          ...update(state, target.id, (l) => ({...l, id: action.id, coords: action.coords})),
+          ...update(state, target.id, (l) => ({
+            ...l,
+            id: action.id,
+            coords: action.coords,
+            closed: action.closed,
+          })),
           selectedId: action.id,
           drawing: false,
         };
       }
-      const line = makeLine(state.lines, {id: action.id, coords: action.coords});
+      const line = makeLine(state.lines, {
+        id: action.id,
+        coords: action.coords,
+        closed: action.closed,
+      });
       return {...state, lines: [...state.lines, line], selectedId: line.id, drawing: false};
     }
     case 'edited':

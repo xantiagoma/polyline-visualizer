@@ -1,14 +1,39 @@
 import {useMemo, useRef, useState, type ActionDispatch} from 'react';
-import {EyeIcon, EyeOffIcon, LocateFixedIcon, MapPinPlusIcon, Trash2Icon} from 'lucide-react';
+import {
+  DownloadIcon,
+  EllipsisVerticalIcon,
+  EyeIcon,
+  EyeOffIcon,
+  LocateFixedIcon,
+  MapPinPlusIcon,
+  PentagonIcon,
+  SplineIcon,
+  TableIcon,
+  Trash2Icon,
+} from 'lucide-react';
 import {toast} from 'sonner';
 import {CopyButton} from '@/components/copy-button';
+import {Badge} from '@/components/ui/badge';
 import {Button} from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {Textarea} from '@/components/ui/textarea';
 import {Tooltip, TooltipContent, TooltipTrigger} from '@/components/ui/tooltip';
 import {formatLabel, parse, serialize} from '@/lib/formats';
-import {formatCount, formatDistance, lineLength} from '@/lib/geo';
+import {exportFile, FILE_TYPES, type FileKind} from '@/lib/files';
+import {formatArea, formatCount, formatDistance, perimeter, ringArea} from '@/lib/geo';
 import {interpretInput, type Action, type Line, type State} from '@/lib/store';
-import {cn} from '@/lib/utils';
+import {cn, downloadFile} from '@/lib/utils';
+
+export type LinePanel = 'simplify' | 'points';
 
 const PLACEHOLDERS = {
   encoded: 'Paste an encoded polyline, e.g. _p~iF~ps|U_ulLnnqC_mqNvxq`@',
@@ -59,7 +84,9 @@ export function LineCard({
   format,
   precision,
   dispatch,
+  onOpenPanel,
 }: {
+  onOpenPanel: (panel: LinePanel) => void;
   line: Line;
   index: number;
   selected: boolean;
@@ -72,8 +99,8 @@ export function LineCard({
   const pasted = useRef(false);
 
   const derived = useMemo(
-    () => serialize(line.coords, format, precision, line.name),
-    [line.coords, format, precision, line.name],
+    () => serialize(line.coords, format, precision, line.name, line.closed),
+    [line.coords, format, precision, line.name, line.closed],
   );
   const text = line.draft ?? derived;
   const result = useMemo(
@@ -82,9 +109,19 @@ export function LineCard({
   );
   const error = result && !result.ok ? result : null;
   const stats = useMemo(
-    () => ({count: line.coords.length, length: lineLength(line.coords)}),
-    [line.coords],
+    () => ({
+      count: line.coords.length,
+      length: perimeter(line.coords, line.closed),
+      area: line.closed ? ringArea(line.coords) : 0,
+    }),
+    [line.coords, line.closed],
   );
+  const minPoints = line.closed ? 3 : 2;
+
+  function download(kind: FileKind) {
+    const file = exportFile([line], kind, line.name);
+    downloadFile(file.content, file.fileName, file.mime);
+  }
   const id = `line-${line.id}`;
 
   function onChange(value: string) {
@@ -153,18 +190,75 @@ export function LineCard({
         >
           {line.hidden ? <EyeOffIcon /> : <EyeIcon />}
         </IconAction>
-        <IconAction
-          label="Delete line"
-          className="hover:text-destructive"
-          onClick={() => dispatch({type: 'remove', id: line.id})}
-        >
-          <Trash2Icon />
-        </IconAction>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`More actions for ${line.name}`}
+              />
+            }
+          >
+            <EllipsisVerticalIcon />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuCheckboxItem
+                checked={line.closed}
+                onCheckedChange={() => dispatch({type: 'toggleClosed', id: line.id})}
+              >
+                <PentagonIcon />
+                Closed (zone)
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuItem
+                disabled={stats.count <= minPoints}
+                onClick={() => onOpenPanel('simplify')}
+              >
+                <SplineIcon />
+                Simplify…
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={stats.count === 0} onClick={() => onOpenPanel('points')}>
+                <TableIcon />
+                Points and segments
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Download</DropdownMenuLabel>
+              {(Object.keys(FILE_TYPES) as FileKind[]).map((kind) => (
+                <DropdownMenuItem
+                  key={kind}
+                  disabled={stats.count === 0}
+                  onClick={() => download(kind)}
+                >
+                  <DownloadIcon />
+                  {FILE_TYPES[kind].label} (.{FILE_TYPES[kind].ext})
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={() => dispatch({type: 'remove', id: line.id})}
+            >
+              <Trash2Icon />
+              Delete {line.closed ? 'zone' : 'line'}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
       <p className="mt-0.5 px-1 text-xs text-muted-foreground tabular">
+        {line.closed && (
+          <Badge variant="secondary" className="mr-1.5 h-4 px-1.5 text-[0.65rem]">
+            Zone
+          </Badge>
+        )}
         {formatCount(stats.count)}
-        {stats.count > 1 && ` · ${formatDistance(stats.length)}`}
-        {stats.count === 1 && ' · needs 2 to draw'}
+        {line.closed && stats.count >= 3 && ` · ${formatArea(stats.area)}`}
+        {stats.count > 1 && ` · ${formatDistance(stats.length)}${line.closed ? ' perimeter' : ''}`}
+        {stats.count > 0 && stats.count < minPoints && ` · needs ${minPoints} to draw`}
       </p>
       <Textarea
         id={id}

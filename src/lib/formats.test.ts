@@ -138,3 +138,46 @@ describe('detectFormat', () => {
     expect(detectFormat('[[[1, 2]], [[-122.4, 37.7]]]')).toBe('lnglat');
   });
 });
+
+describe('closed lines (zones)', () => {
+  const RING: LatLng[] = [
+    [0, 0],
+    [0, 1],
+    [1, 1],
+  ];
+
+  test('a repeated first point marks a ring in encoded and array text', () => {
+    const r = parse(encode([...RING, RING[0]!]), 'encoded', 5);
+    expect(r.ok && r.lines[0]).toEqual({coords: RING, closed: true});
+    const open = parse('[[0, 0], [0, 1], [0, 0]]', 'latlng', 5);
+    expect(open.ok && open.lines[0]!.closed).toBeUndefined();
+  });
+
+  test('GeoJSON Polygon and MultiPolygon, holes noted', () => {
+    const polygon = {
+      type: 'Polygon',
+      coordinates: [
+        [[0, 0], [1, 0], [1, 1], [0, 0]],
+        [[0.2, 0.2], [0.3, 0.2], [0.3, 0.3], [0.2, 0.2]],
+      ],
+    };
+    const r = parse(JSON.stringify(polygon), 'geojson', 5);
+    expect(r.ok && r.lines).toEqual([{coords: RING, closed: true, name: undefined}]);
+    expect(r.ok && r.notes?.[0]).toContain('holes');
+    const multi = parse(
+      JSON.stringify({type: 'MultiPolygon', coordinates: [[polygon.coordinates[0]], [polygon.coordinates[0]]]}),
+      'geojson',
+      5,
+    );
+    expect(multi.ok && multi.lines).toHaveLength(2);
+  });
+
+  test('serialize writes the ring back in every format', () => {
+    for (const format of ['encoded', 'latlng', 'lnglat', 'geojson'] as const) {
+      const r = parse(serialize(RING, format, 5, 'Zone', true), format, 5);
+      expect(r.ok && r.lines[0]!.coords).toEqual(RING);
+      expect(r.ok && r.lines[0]!.closed).toBe(true);
+    }
+    expect(serialize(RING, 'geojson', 5, 'Zone', true)).toContain('"type": "Polygon"');
+  });
+});

@@ -23,11 +23,19 @@ import {
   CheckIcon,
   MapIcon,
   SatelliteIcon,
+  PentagonIcon,
+  FileUpIcon,
+  DownloadIcon,
 } from 'lucide-react';
 import {flushSync} from 'react-dom';
 import {toast} from 'sonner';
-import {writeClipboard} from '@/lib/utils';
-import {LineCard} from '@/components/line-card';
+import {downloadFile, writeClipboard} from '@/lib/utils';
+import {exportFile, FILE_TYPES, importText, type FileKind} from '@/lib/files';
+import type {ParsedLine} from '@/lib/formats';
+import type {LatLng} from '@/lib/polyline';
+import {LineCard, type LinePanel} from '@/components/line-card';
+import {PointsPanel} from '@/components/points-panel';
+import {SimplifyPanel, toleranceAt} from '@/components/simplify-panel';
 import {PlaceSearch} from '@/components/place-search';
 import {ThemeControl} from '@/components/theme-control';
 import {Button} from '@/components/ui/button';
@@ -44,10 +52,19 @@ import {Tabs, TabsList, TabsTrigger} from '@/components/ui/tabs';
 import {ToggleGroup, ToggleGroupItem} from '@/components/ui/toggle-group';
 import {Tooltip, TooltipContent, TooltipTrigger} from '@/components/ui/tooltip';
 import {FORMATS, formatLabel, serializeAll, type Format} from '@/lib/formats';
-import {formatDistance, lineLength} from '@/lib/geo';
+import {formatDistance, perimeter, simplify} from '@/lib/geo';
 import type {Place} from '@/lib/places';
 import {decode, type Precision} from '@/lib/polyline';
-import {LINE_COLORS, newId, reducer, type Action, type Line, type LineEnd, type State} from '@/lib/store';
+import {
+  LINE_COLORS,
+  newId,
+  reducer,
+  type Action,
+  type DrawKind,
+  type Line,
+  type LineEnd,
+  type State,
+} from '@/lib/store';
 import {useTheme} from '@/lib/theme';
 import {fromHash, toHash} from '@/lib/url-state';
 
@@ -70,8 +87,20 @@ async function copy(text: string, label: string) {
   }
 }
 
-function MoreMenu({state, dispatch}: {state: State; dispatch: ActionDispatch<[Action]>}) {
+function MoreMenu({
+  state,
+  dispatch,
+  onImport,
+}: {
+  state: State;
+  dispatch: ActionDispatch<[Action]>;
+  onImport: () => void;
+}) {
   const hasCoords = state.lines.some((l) => l.coords.length > 0);
+  function downloadAll(kind: FileKind) {
+    const file = exportFile(state.lines, kind, 'polylines');
+    downloadFile(file.content, file.fileName, file.mime);
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -109,6 +138,19 @@ function MoreMenu({state, dispatch}: {state: State; dispatch: ActionDispatch<[Ac
             <FileDownIcon />
             Copy all as FeatureCollection
           </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem onClick={onImport}>
+            <FileUpIcon />
+            Import file (GPX, KML, GeoJSON)…
+          </DropdownMenuItem>
+          {(Object.keys(FILE_TYPES) as FileKind[]).map((kind) => (
+            <DropdownMenuItem key={kind} disabled={!hasCoords} onClick={() => downloadAll(kind)}>
+              <DownloadIcon />
+              Download all as {FILE_TYPES[kind].label}
+            </DropdownMenuItem>
+          ))}
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
@@ -189,12 +231,22 @@ function MapFallback() {
   );
 }
 
-function DrawingBanner({onCancel}: {onCancel: () => void}) {
+function DrawingBanner({kind, onCancel}: {kind: DrawKind; onCancel: () => void}) {
+  const Icon = kind === 'zone' ? PentagonIcon : PencilLineIcon;
   return (
     <div className="absolute inset-x-3 top-3 z-10 mx-auto flex max-w-md items-center gap-2 rounded-lg border bg-card/95 px-3 py-2 text-xs shadow-md backdrop-blur sm:text-sm">
-      <PencilLineIcon className="size-4 shrink-0 text-primary" />
+      <Icon className="size-4 shrink-0 text-primary" />
       <p className="min-w-0 flex-1">
-        Click to add points. Click the last point or press <Kbd>Enter</Kbd> to finish.
+        {kind === 'zone' ? (
+          <>
+            Click to add corners. Click the first point or press <Kbd>Enter</Kbd> to close the
+            zone.
+          </>
+        ) : (
+          <>
+            Click to add points. Click the last point or press <Kbd>Enter</Kbd> to finish.
+          </>
+        )}
       </p>
       <Button variant="ghost" size="sm" onClick={onCancel}>
         <XIcon data-icon="inline-start" />
@@ -299,7 +351,7 @@ export function App() {
     return {
       lines: drawn.length,
       points: drawn.reduce((n, l) => n + l.coords.length, 0),
-      length: drawn.reduce((m, l) => m + lineLength(l.coords), 0),
+      length: drawn.reduce((m, l) => m + perimeter(l.coords, l.closed), 0),
     };
   }, [state.lines]);
   // While adding points: Enter/Esc finish, Backspace undoes (outside fields).
@@ -328,8 +380,104 @@ export function App() {
     return LINE_COLORS.find((c) => !used.has(c)) ?? LINE_COLORS[0]!;
   }, [state.lines]);
 
+  // One line tool at a time: Simplify floats over the map, Points replaces
+  // the line list. Both close if their line is deleted.
+  const [panel, setPanel] = useState<{kind: LinePanel; id: string} | null>(null);
+  const panelLine = state.lines.find((l) => l.id === panel?.id);
+  const [simplifyAt, setSimplifyAt] = useState(30);
+  const simplified = useMemo(
+    () =>
+      panel?.kind === 'simplify' && panelLine
+        ? simplify(panelLine.coords, toleranceAt(simplifyAt), panelLine.closed)
+        : null,
+    [panel?.kind, panelLine, simplifyAt],
+  );
+  const [hovered, setHovered] = useState<LatLng | null>(null);
+  const [focus, setFocus] = useState<{coords: LatLng; n: number} | null>(null);
+  function openPanel(kind: LinePanel, id: string) {
+    setPanel({kind, id});
+    setHovered(null);
+    // While simplifying, the line is deselected so its vertex handles do not
+    // hide the dashed preview.
+    dispatch({type: 'select', id: kind === 'simplify' ? null : id});
+    if (kind === 'simplify') dispatch({type: 'fit', ids: [id]});
+  }
+  function closePanel() {
+    setPanel(null);
+    setHovered(null);
+  }
+
+  // Import: file picker or files dropped anywhere on the page.
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  async function importFiles(files: FileList | File[]) {
+    const lines: ParsedLine[] = [];
+    const notes: string[] = [];
+    for (const file of files) {
+      if (file.size > 50 * 1024 * 1024) {
+        toast.error(`${file.name} is larger than 50 MB`);
+        continue;
+      }
+      const result = importText(await file.text(), file.name, state.precision);
+      if ('error' in result) {
+        toast.error(`Could not import ${file.name}`, {description: result.error});
+        continue;
+      }
+      const base = file.name.replace(/\.[^.]+$/, '');
+      lines.push(
+        ...result.lines.map((l, i) => ({
+          ...l,
+          name: l.name ?? (result.lines.length > 1 ? `${base} ${i + 1}` : base),
+        })),
+      );
+      notes.push(...result.notes);
+    }
+    if (lines.length === 0) return;
+    closePanel();
+    dispatch({type: 'import', lines});
+    toast.success(`Imported ${lines.length} ${lines.length === 1 ? 'shape' : 'shapes'}`, {
+      description: notes.join(' ') || undefined,
+    });
+  }
+
   return (
-    <div className="grid h-dvh grid-cols-1 grid-rows-[auto_minmax(14rem,42dvh)_1fr] [grid-template-areas:'header'_'map'_'panel'] md:grid-cols-[minmax(22rem,26rem)_1fr] md:grid-rows-[auto_1fr] md:[grid-template-areas:'header_map'_'panel_map']">
+    <div
+      className="grid h-dvh grid-cols-1 grid-rows-[auto_minmax(14rem,42dvh)_1fr] [grid-template-areas:'header'_'map'_'panel'] md:grid-cols-[minmax(22rem,26rem)_1fr] md:grid-rows-[auto_1fr] md:[grid-template-areas:'header_map'_'panel_map']"
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes('Files')) return;
+        e.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setDragging(false);
+        void importFiles(e.dataTransfer.files);
+      }}
+    >
+      <input
+        ref={fileInput}
+        type="file"
+        multiple
+        accept=".gpx,.kml,.geojson,.json,.txt,application/gpx+xml,application/vnd.google-earth.kml+xml,application/geo+json,application/json,text/plain"
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files) void importFiles(e.target.files);
+          e.target.value = '';
+        }}
+      />
+      {dragging && (
+        <div className="pointer-events-none fixed inset-3 z-50 grid place-items-center rounded-2xl border-2 border-dashed border-primary bg-background/80 backdrop-blur-sm">
+          <div className="text-center">
+            <FileUpIcon className="mx-auto size-8 text-primary" />
+            <p className="mt-2 font-semibold">Drop to import</p>
+            <p className="text-sm text-muted-foreground">GPX, KML, GeoJSON or text with polylines</p>
+          </div>
+        </div>
+      )}
       <header className="flex items-center gap-2 border-b px-4 py-2.5 [grid-area:header] md:border-r">
         <img src={logo} alt="" className="size-6" />
         <h1 className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight">
@@ -358,15 +506,42 @@ export function App() {
             basemap={satellite ? 'satellite' : theme}
             fit={state.fit}
             place={place}
+            ghost={
+              simplified && panelLine
+                ? {coords: simplified, closed: panelLine.closed, color: panelLine.color}
+                : null
+            }
+            highlight={hovered && panelLine ? {coords: hovered, color: panelLine.color} : null}
+            focus={focus}
             centerRef={mapCenter}
-            onDrawn={(id, coords) => dispatch({type: 'drawn', id, coords})}
+            onDrawn={(id, coords, closed) => dispatch({type: 'drawn', id, coords, closed})}
             onEdited={(id, coords) => dispatch({type: 'edited', id, coords})}
             onSelect={(id) => dispatch({type: 'select', id})}
             onExtendPoint={(coords) => dispatch({type: 'addPoint', coords})}
           />
         </Suspense>
+        {panel?.kind === 'simplify' && panelLine && simplified && (
+          <SimplifyPanel
+            line={panelLine}
+            position={simplifyAt}
+            simplified={simplified}
+            onPositionChange={setSimplifyAt}
+            onCancel={closePanel}
+            onApply={() => {
+              const before = panelLine.coords.length;
+              dispatch({type: 'edited', id: panelLine.id, coords: simplified});
+              toast.success(`Simplified ${panelLine.name}`, {
+                description: `${before.toLocaleString('en')} → ${simplified.length.toLocaleString('en')} points`,
+              });
+              closePanel();
+            }}
+          />
+        )}
         {state.drawing ? (
-          <DrawingBanner onCancel={() => dispatch({type: 'setDrawing', drawing: false})} />
+          <DrawingBanner
+            kind={state.drawing}
+            onCancel={() => dispatch({type: 'setDrawing', drawing: false})}
+          />
         ) : extendingLine && state.extending ? (
           <ExtendBanner line={extendingLine} end={state.extending.end} dispatch={dispatch} />
         ) : (
@@ -395,11 +570,27 @@ export function App() {
             )}
             <Button
               className="shadow-md"
-              onClick={() => dispatch({type: 'setDrawing', drawing: true})}
+              onClick={() => dispatch({type: 'setDrawing', drawing: 'line'})}
             >
               <PencilLineIcon data-icon="inline-start" />
               Draw
             </Button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="bg-card shadow-md"
+                    aria-label="Draw zone"
+                    onClick={() => dispatch({type: 'setDrawing', drawing: 'zone'})}
+                  />
+                }
+              >
+                <PentagonIcon />
+              </TooltipTrigger>
+              <TooltipContent>Draw zone (closed shape)</TooltipContent>
+            </Tooltip>
             {selectedLine && (
               <Button
                 variant="outline"
@@ -452,55 +643,74 @@ export function App() {
         aria-label="Lines"
         className="flex min-h-0 flex-col border-t [grid-area:panel] md:border-t-0 md:border-r"
       >
-        <div className="flex flex-col gap-2 border-b px-4 py-3">
-          <Settings state={state} dispatch={dispatch} />
-          <p className="text-xs text-muted-foreground tabular" aria-live="polite">
-            {totals.lines === 0
-              ? 'Paste a polyline below or draw one on the map.'
-              : `${totals.lines} ${totals.lines === 1 ? 'line' : 'lines'} · ${totals.points.toLocaleString('en')} points · ${formatDistance(totals.length)}`}
-          </p>
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-          {state.lines.map((line, index) => (
-            <LineCard
-              key={line.id}
-              line={line}
-              index={index}
-              selected={line.id === state.selectedId}
-              format={state.format}
-              precision={state.precision}
-              dispatch={dispatch}
-            />
-          ))}
-          {state.lines.length === 0 && (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              No lines. Add one, or draw on the map.
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-2 border-t px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-          <Button
-            variant="outline"
-            className="flex-1"
-            onClick={() => {
-              const id = newId();
-              flushSync(() => dispatch({type: 'add', id}));
-              document.getElementById(`line-${id}`)?.focus();
-            }}
-          >
-            <PlusIcon data-icon="inline-start" />
-            Add line
-          </Button>
-          <Button
-            variant={state.drawing ? 'secondary' : 'outline'}
-            className="flex-1"
-            onClick={() => dispatch({type: 'setDrawing', drawing: !state.drawing})}
-          >
-            <PencilLineIcon data-icon="inline-start" />
-            {state.drawing ? 'Stop drawing' : 'Draw on map'}
-          </Button>
-          <MoreMenu state={state} dispatch={dispatch} />
-        </div>
+        {panel?.kind === 'points' && panelLine ? (
+          <PointsPanel
+            line={panelLine}
+            dispatch={dispatch}
+            onClose={closePanel}
+            onHover={setHovered}
+            onLocate={(coords) => setFocus((prev) => ({coords, n: (prev?.n ?? 0) + 1}))}
+          />
+        ) : (
+          <>
+            <div className="flex flex-col gap-2 border-b px-4 py-3">
+              <Settings state={state} dispatch={dispatch} />
+              <p className="text-xs text-muted-foreground tabular" aria-live="polite">
+                {totals.lines === 0
+                  ? 'Paste a polyline, drop a file or draw on the map.'
+                  : `${totals.lines} ${totals.lines === 1 ? 'shape' : 'shapes'} · ${totals.points.toLocaleString('en')} points · ${formatDistance(totals.length)}`}
+              </p>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+              {state.lines.map((line, index) => (
+                <LineCard
+                  key={line.id}
+                  line={line}
+                  index={index}
+                  selected={line.id === state.selectedId}
+                  format={state.format}
+                  precision={state.precision}
+                  dispatch={dispatch}
+                  onOpenPanel={(kind) => openPanel(kind, line.id)}
+                />
+              ))}
+              {state.lines.length === 0 && (
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  No lines. Add one, draw on the map or drop a file.
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 border-t px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => {
+                  const id = newId();
+                  flushSync(() => dispatch({type: 'add', id}));
+                  document.getElementById(`line-${id}`)?.focus();
+                }}
+              >
+                <PlusIcon data-icon="inline-start" />
+                Add line
+              </Button>
+              <Button
+                variant={state.drawing ? 'secondary' : 'outline'}
+                className="flex-1"
+                onClick={() =>
+                  dispatch({type: 'setDrawing', drawing: state.drawing ? false : 'line'})
+                }
+              >
+                <PencilLineIcon data-icon="inline-start" />
+                {state.drawing ? 'Stop drawing' : 'Draw on map'}
+              </Button>
+              <MoreMenu
+                state={state}
+                dispatch={dispatch}
+                onImport={() => fileInput.current?.click()}
+              />
+            </div>
+          </>
+        )}
       </aside>
     </div>
   );
