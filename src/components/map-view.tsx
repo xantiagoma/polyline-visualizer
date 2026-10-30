@@ -1,4 +1,4 @@
-import {useEffect, useEffectEvent, useRef, useState} from 'react';
+import {useEffect, useEffectEvent, useRef, useState, type RefObject} from 'react';
 import * as maplibregl from 'maplibre-gl';
 import type {GeoJSONSource, StyleSpecification} from 'maplibre-gl';
 import {
@@ -11,13 +11,45 @@ import {
 } from 'terra-draw';
 import {TerraDrawMapLibreGLAdapter} from 'terra-draw-maplibre-gl-adapter';
 import {bounds} from '@/lib/geo';
+import type {Place} from '@/lib/places';
 import type {LatLng} from '@/lib/polyline';
 import type {Line, State} from '@/lib/store';
 
-// OpenFreeMap: free vector tiles, no API key, no usage limits (https://openfreemap.org)
-const STYLES = {
+export type Basemap = 'light' | 'dark' | 'satellite';
+
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services';
+const esriRaster = (service: string, maxzoom: number) => ({
+  type: 'raster' as const,
+  tiles: [`${ESRI}/${service}/MapServer/tile/{z}/{y}/{x}`],
+  tileSize: 256,
+  maxzoom,
+});
+
+/**
+ * OpenFreeMap: free vector tiles, no API key, no usage limits
+ * (https://openfreemap.org). Satellite: Esri World Imagery with its roads and
+ * places reference layers on top (keyless raster tiles, attribution required).
+ */
+const STYLES: Record<Basemap, string | StyleSpecification> = {
   light: 'https://tiles.openfreemap.org/styles/positron',
   dark: 'https://tiles.openfreemap.org/styles/dark',
+  satellite: {
+    version: 8,
+    sources: {
+      imagery: {
+        ...esriRaster('World_Imagery', 19),
+        attribution:
+          'Imagery © <a href="https://www.esri.com/">Esri</a>, Maxar, Earthstar Geographics and the GIS User Community',
+      },
+      roads: esriRaster('Reference/World_Transportation', 19),
+      places: esriRaster('Reference/World_Boundaries_and_Places', 19),
+    },
+    layers: [
+      {id: 'imagery', type: 'raster', source: 'imagery'},
+      {id: 'roads', type: 'raster', source: 'roads', paint: {'raster-opacity': 0.8}},
+      {id: 'places', type: 'raster', source: 'places'},
+    ],
+  },
 };
 
 // Served from /vendor (src/assets.ts); the bundler does not follow the worker.
@@ -101,8 +133,12 @@ type Props = {
   drawing: boolean;
   extending: State['extending'];
   drawColor: string;
-  theme: 'light' | 'dark';
+  basemap: Basemap;
   fit: State['fit'];
+  /** A searched place to fly to and mark; `n` changes on every pick. */
+  place: {place: Place; n: number} | null;
+  /** Written with the map centre, for search bias. */
+  centerRef: RefObject<[number, number] | null>;
   onDrawn: (id: string, coords: LatLng[]) => void;
   onEdited: (id: string, coords: LatLng[]) => void;
   onSelect: (id: string | null) => void;
@@ -117,8 +153,10 @@ export default function MapView({
   drawing,
   extending,
   drawColor,
-  theme,
+  basemap,
   fit,
+  place,
+  centerRef,
   onDrawn,
   onEdited,
   onSelect,
@@ -160,7 +198,7 @@ export default function MapView({
   const initialView = useEffectEvent(() =>
     bounds(lines.filter((l) => !l.hidden).map((l) => l.coords)),
   );
-  const initialStyle = useEffectEvent(() => STYLES[theme]);
+  const initialStyle = useEffectEvent(() => STYLES[basemap]);
 
   // Create the map and Terra Draw once.
   useEffect(() => {
@@ -239,6 +277,12 @@ export default function MapView({
         handleChange(d, ids);
       });
       d.on('select', (id) => handleSelect(String(id)));
+      const trackCenter = () => {
+        const c = map.getCenter();
+        centerRef.current = [c.lng, c.lat];
+      };
+      trackCenter();
+      map.on('moveend', trackCenter);
       d.on('deselect', () => {
         if (!switchingMode.current) handleSelect(null);
       });
@@ -252,13 +296,13 @@ export default function MapView({
     };
   }, []);
 
-  // Basemap follows the theme.
-  const styleTheme = useRef(theme);
+  // Basemap follows the theme, or the satellite choice.
+  const currentBasemap = useRef(basemap);
   useEffect(() => {
-    if (!instance || styleTheme.current === theme) return;
-    styleTheme.current = theme;
-    instance.map.setStyle(STYLES[theme], {transformStyle: keepOwnLayers});
-  }, [instance, theme]);
+    if (!instance || currentBasemap.current === basemap) return;
+    currentBasemap.current = basemap;
+    instance.map.setStyle(STYLES[basemap], {transformStyle: keepOwnLayers});
+  }, [instance, basemap]);
 
   // Lines → Terra Draw features and endpoint markers.
   useEffect(() => {
@@ -371,6 +415,27 @@ export default function MapView({
     const box = bounds(targets.map((l) => l.coords));
     if (box) instance.map.fitBounds(box, {...FIT, duration: 500});
   }, [instance, fit, lines]);
+
+  // Searched place: fly there and drop a marker until the next pick or clear.
+  const placeN = place?.n;
+  const placeValue = place?.place;
+  useEffect(() => {
+    if (!instance || !placeValue) return;
+    const {map} = instance;
+    if (placeValue.bbox) {
+      map.fitBounds(placeValue.bbox, {...FIT, maxZoom: 17, duration: 900});
+    } else {
+      map.flyTo({center: placeValue.lngLat, zoom: placeValue.zoom, duration: 900});
+    }
+    const marker = new maplibregl.Marker({color: '#1d5fd6'})
+      .setLngLat(placeValue.lngLat)
+      .addTo(map);
+    marker.getElement().setAttribute('aria-label', placeValue.name);
+    marker.getElement().title = placeValue.name;
+    return () => {
+      marker.remove();
+    };
+  }, [instance, placeN, placeValue]);
 
   // MapLibre's stylesheet sets .maplibregl-map to position: relative (and it
   // is not in a cascade layer), so the map fills a positioned wrapper.

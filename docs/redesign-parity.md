@@ -50,5 +50,7 @@ px and desktop.
 | Extend a line from its end or start (Add points mode, ⌫ undo, Enter/Esc) | store `extend`/`addPoint`/`removePoint`, `ExtendBanner`, `MapView` | T, B (3 → 5 points, ⌫ → 4, selection kept after Done) |
 | Shareable URL in the hash, copy link, copy all, FeatureCollection | lib/url-state.ts, More menu | T, B |
 | `{lat, lng}` objects, elevation values, quoted encoded strings | lib/formats.ts | T |
+| Place search (Photon, `/` shortcut, marker, biased to the map centre) | lib/places.ts, `PlaceSearch`, `MapView` | T (lib/places.test.ts), B (“parque berrio medellin” → flies to Parque Berrío, marker removable) |
+| Satellite view (Esri World Imagery + roads/places), saved per browser | `MapView` `STYLES.satellite`, map toolbar toggle | B (lines kept across switches, attribution shown) |
 | Light / dark / system theme, basemap follows | lib/theme.ts, `setStyle` keeping draw layers | B |
 | Responsive: map on top, panel below on mobile | `App` grid | B (no horizontal scroll at 320/390) |

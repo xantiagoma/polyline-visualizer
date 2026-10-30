@@ -25,7 +25,11 @@ format at a time and stays in sync with the map.
 - Shareable URL: lines, names, format and precision live in the hash
   (`#f=latlng&pr=6&l=…&n=…`), so long polylines never hit request limits.
   Copy all lines in any format, or as a FeatureCollection.
-- Light, dark and system themes; the basemap follows.
+- Place search (press `/`): search-as-you-type with
+  [Photon](https://photon.komoot.io) over OpenStreetMap, biased to the map
+  view; the map flies to the result and drops a marker.
+- Light, dark and system themes; the basemap follows. Satellite view (Esri
+  World Imagery with roads and places), remembered per browser.
 
 Originally a fork of [open-polyline-decoder](https://open-polyline-decoder.60devs.com/).
 
@@ -41,7 +45,8 @@ bun run preview  # build, then serve dist/ (PORT=4419 to change the port)
 ```
 
 Built with Bun, React, [MapLibre GL](https://maplibre.org/) with
-[OpenFreeMap](https://openfreemap.org/) tiles (free, no API key),
+[OpenFreeMap](https://openfreemap.org/) tiles (free, no API key), Esri World
+Imagery for the satellite view,
 [Terra Draw](https://terradraw.io/) and shadcn/ui on Base UI. Hosted on
 Vercel.
 

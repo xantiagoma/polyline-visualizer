@@ -1,4 +1,13 @@
-import {lazy, Suspense, useEffect, useMemo, useReducer, type ActionDispatch} from 'react';
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ActionDispatch,
+} from 'react';
 import {
   EllipsisIcon,
   FileDownIcon,
@@ -12,11 +21,14 @@ import {
   MapPinPlusIcon,
   Undo2Icon,
   CheckIcon,
+  MapIcon,
+  SatelliteIcon,
 } from 'lucide-react';
 import {flushSync} from 'react-dom';
 import {toast} from 'sonner';
 import {writeClipboard} from '@/lib/utils';
 import {LineCard} from '@/components/line-card';
+import {PlaceSearch} from '@/components/place-search';
 import {ThemeControl} from '@/components/theme-control';
 import {Button} from '@/components/ui/button';
 import {
@@ -33,6 +45,7 @@ import {ToggleGroup, ToggleGroupItem} from '@/components/ui/toggle-group';
 import {Tooltip, TooltipContent, TooltipTrigger} from '@/components/ui/tooltip';
 import {FORMATS, formatLabel, serializeAll, type Format} from '@/lib/formats';
 import {formatDistance, lineLength} from '@/lib/geo';
+import type {Place} from '@/lib/places';
 import {decode, type Precision} from '@/lib/polyline';
 import {LINE_COLORS, newId, reducer, type Action, type Line, type LineEnd, type State} from '@/lib/store';
 import {useTheme} from '@/lib/theme';
@@ -240,9 +253,30 @@ function ExtendBanner({
   );
 }
 
+const BASEMAP_KEY = 'pv-satellite';
+
+function readSatellite() {
+  try {
+    return localStorage.getItem(BASEMAP_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function App() {
   const [state, dispatch] = useReducer(reducer, undefined, () => fromHash(location.hash));
   const {resolved: theme} = useTheme();
+  const [satellite, setSatellite] = useState(readSatellite);
+  const [place, setPlace] = useState<{place: Place; n: number} | null>(null);
+  const mapCenter = useRef<[number, number] | null>(null);
+  function toggleSatellite() {
+    const next = !satellite;
+    setSatellite(next);
+    try {
+      if (next) localStorage.setItem(BASEMAP_KEY, '1');
+      else localStorage.removeItem(BASEMAP_KEY);
+    } catch {}
+  }
 
   // The URL hash mirrors the lines, so the address bar is always shareable.
   const hash = toHash(state);
@@ -321,8 +355,10 @@ export function App() {
             drawing={state.drawing}
             extending={state.extending}
             drawColor={drawColor}
-            theme={theme}
+            basemap={satellite ? 'satellite' : theme}
             fit={state.fit}
+            place={place}
+            centerRef={mapCenter}
             onDrawn={(id, coords) => dispatch({type: 'drawn', id, coords})}
             onEdited={(id, coords) => dispatch({type: 'edited', id, coords})}
             onSelect={(id) => dispatch({type: 'select', id})}
@@ -334,7 +370,29 @@ export function App() {
         ) : extendingLine && state.extending ? (
           <ExtendBanner line={extendingLine} end={state.extending.end} dispatch={dispatch} />
         ) : (
-          <div className="absolute top-3 left-3 z-10 flex gap-2">
+          <div className="absolute top-3 right-14 left-3 z-10 flex flex-wrap gap-2">
+            <PlaceSearch
+              near={() => mapCenter.current}
+              onSelect={(picked) => setPlace((prev) => ({place: picked, n: (prev?.n ?? 0) + 1}))}
+            />
+            {place && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="bg-card shadow-md"
+                      aria-label={`Remove marker for ${place.place.name}`}
+                      onClick={() => setPlace(null)}
+                    />
+                  }
+                >
+                  <XIcon />
+                </TooltipTrigger>
+                <TooltipContent>Remove marker: {place.place.name}</TooltipContent>
+              </Tooltip>
+            )}
             <Button
               className="shadow-md"
               onClick={() => dispatch({type: 'setDrawing', drawing: true})}
@@ -346,10 +404,11 @@ export function App() {
               <Button
                 variant="outline"
                 className="bg-card shadow-md"
+                aria-label="Add points"
                 onClick={() => dispatch({type: 'extend', id: selectedLine.id, end: 'end'})}
               >
                 <MapPinPlusIcon data-icon="inline-start" style={{color: selectedLine.color}} />
-                Add points
+                <span className="hidden sm:inline">Add points</span>
               </Button>
             )}
             <Tooltip>
@@ -368,6 +427,22 @@ export function App() {
                 <MaximizeIcon />
               </TooltipTrigger>
               <TooltipContent>Zoom to all lines</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="bg-card shadow-md"
+                    aria-label={satellite ? 'Show map view' : 'Show satellite view'}
+                    onClick={toggleSatellite}
+                  />
+                }
+              >
+                {satellite ? <MapIcon /> : <SatelliteIcon />}
+              </TooltipTrigger>
+              <TooltipContent>{satellite ? 'Map view' : 'Satellite view'}</TooltipContent>
             </Tooltip>
           </div>
         )}
